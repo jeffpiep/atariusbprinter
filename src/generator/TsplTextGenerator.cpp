@@ -5,10 +5,9 @@
 
 static const char* TAG = "TsplTextGenerator";
 
-// dots → "N mm" string (8 dots per mm at 203 dpi)
+// dots → "N mm" string (8 dots per mm at 203 dpi), ceiling so SIZE covers all content
 std::string TsplTextGenerator::dotsToMmStr(uint16_t dots) {
-    // Use integer arithmetic: dots / 8 = mm (truncated)
-    uint16_t mm = dots / DOTS_PER_MM;
+    uint16_t mm = (dots + DOTS_PER_MM - 1) / DOTS_PER_MM;
     char buf[16];
     snprintf(buf, sizeof(buf), "%u mm", mm);
     return buf;
@@ -69,6 +68,7 @@ void TsplTextGenerator::doFlushLabel(std::vector<uint8_t>& out) {
     if (contentH < lineH) contentH = lineH; // never degenerate
 
     // Header
+    appendLit("SET GAP OFF\r\n");   // disable auto gap-calibration (prevents 10-20" blank feed)
     append("SIZE " + dotsToMmStr(m_cfg.labelWidthDots) +
            "," + dotsToMmStr(contentH) + "\r\n");
     appendLit("GAP 0 mm,0 mm\r\n");

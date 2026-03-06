@@ -9,8 +9,8 @@ struct TextConfig {
     uint8_t  gapDots         = 24;    // 3 mm
 
     // TSPL: text placement
-    uint16_t marginLeftDots  = 10;
-    uint16_t marginTopDots   = 10;
+    uint16_t marginLeftDots  = 0;
+    uint16_t marginTopDots   = 0;
     uint8_t  tsplFontId      = 3;     // built-in font 1–8 (TSS24.BF2 alias)
     uint8_t  tsplFontXMul    = 1;
     uint8_t  tsplFontYMul    = 1;
