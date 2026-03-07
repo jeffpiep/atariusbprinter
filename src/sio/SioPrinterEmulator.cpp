@@ -30,10 +30,11 @@ static const char* cmdName(uint8_t cmd) {
 
 SioPrinterEmulator::SioPrinterEmulator(ISioPort& port,
                                         ITextGenerator& generator,
-                                        LineAssembler::Mode colMode)
+                                        LineAssembler::Mode colMode,
+                                        const TextConfig& defaultConfig)
     : m_port(port)
     , m_generator(generator)
-    , m_assembler(colMode, generator)
+    , m_assembler(colMode, generator, defaultConfig)
 {}
 
 uint32_t SioPrinterEmulator::nowMs() const {

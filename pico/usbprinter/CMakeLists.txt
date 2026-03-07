@@ -57,6 +57,7 @@ add_executable(usbprinter
     ${CORE_SOURCES}
     ${PRINTER_ROOT}/platform/rp2040/Rp2040UsbTransport.cpp
     ${PRINTER_ROOT}/platform/rp2040/SioUart.cpp
+    ${PRINTER_ROOT}/platform/rp2040/FlashConfig.cpp
     ${PRINTER_ROOT}/platform/rp2040/main_rp2040.cpp
     ${PRINTER_ROOT}/platform/rp2040/posix_stubs.c
 )
@@ -86,6 +87,8 @@ target_link_libraries(usbprinter PRIVATE
     pico_stdlib
     tinyusb_host
     tinyusb_board
+    hardware_flash
+    hardware_sync
 )
 
 pico_enable_stdio_uart(usbprinter 1)

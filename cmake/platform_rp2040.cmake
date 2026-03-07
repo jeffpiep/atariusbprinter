@@ -25,6 +25,7 @@ add_executable(usb_printer_rp2040
     ${CORE_SOURCES}
     ${CMAKE_SOURCE_DIR}/platform/rp2040/Rp2040UsbTransport.cpp
     ${CMAKE_SOURCE_DIR}/platform/rp2040/SioUart.cpp
+    ${CMAKE_SOURCE_DIR}/platform/rp2040/FlashConfig.cpp
     ${CMAKE_SOURCE_DIR}/platform/rp2040/main_rp2040.cpp
 )
 
@@ -49,6 +50,8 @@ target_link_libraries(usb_printer_rp2040 PRIVATE
     pico_stdlib
     tinyusb_host
     tinyusb_board
+    hardware_flash
+    hardware_sync
 )
 
 pico_add_extra_outputs(usb_printer_rp2040)

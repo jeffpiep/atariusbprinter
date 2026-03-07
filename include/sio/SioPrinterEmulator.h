@@ -2,6 +2,7 @@
 #include "sio/SioCommandFrame.h"
 #include "sio/LineAssembler.h"
 #include "generator/ITextGenerator.h"
+#include "generator/TextConfig.h"
 #include <cstdint>
 #include <cstddef>
 
@@ -24,9 +25,12 @@ public:
 // and submit the resulting PrintJob to PrinterManager.
 class SioPrinterEmulator {
 public:
+    // defaultConfig: passed to LineAssembler as the baseline that ESC ~ R 0
+    // resets to. Omitting it uses TextConfig{} — existing call sites unchanged.
     SioPrinterEmulator(ISioPort& port,
                        ITextGenerator& generator,
-                       LineAssembler::Mode colMode);
+                       LineAssembler::Mode colMode,
+                       const TextConfig& defaultConfig = TextConfig{});
 
     // Advance the state machine. Call as fast as possible from main loop.
     void tick();
@@ -38,6 +42,22 @@ public:
     // Returns 0 if no command has been seen since construction/reset.
     // Use to gate actions that must not interrupt SIO bus activity.
     uint32_t lastActivityMs() const { return m_lastCmdMs; }
+
+    // Returns true (once) if an ESC ~ P sequence was received since last call.
+    // Poll this after tick() and flush/submit the generator if true.
+    bool takePrintRequest() { return m_assembler.takePrintRequest(); }
+
+    // Returns true (once) if ESC ~ S was received; sets slot (0–9).
+    bool takeSaveRequest(uint8_t& slot) { return m_assembler.takeSaveRequest(slot); }
+
+    // Returns true (once) if ESC ~ R was received; sets slot (0–9).
+    bool takeLoadRequest(uint8_t& slot) { return m_assembler.takeLoadRequest(slot); }
+
+    // Apply an externally-loaded TextConfig (e.g. from flash).
+    void setConfig(const TextConfig& cfg) { m_assembler.setConfig(cfg); }
+
+    // Read current config (e.g. to pass to FlashConfig::save).
+    const TextConfig& getConfig() const { return m_assembler.getConfig(); }
 
 private:
     enum class State {

@@ -54,3 +54,6 @@ add_driver_test(test_escp_text_generator test_escp_text_generator.cpp)
 add_driver_test(test_atascii_converter   test_atascii_converter.cpp)
 add_driver_test(test_line_assembler      test_line_assembler.cpp)
 add_driver_test(test_sio_printer_emulator test_sio_printer_emulator.cpp)
+
+# Phase 7 — ESC ~ TSPL config sequences
+add_driver_test(test_line_assembler_esc  test_line_assembler_esc.cpp)

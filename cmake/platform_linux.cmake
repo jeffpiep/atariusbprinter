@@ -17,10 +17,14 @@ set(CORE_SOURCES
     ${CMAKE_SOURCE_DIR}/src/sio/AtasciiConverter.cpp
     ${CMAKE_SOURCE_DIR}/src/sio/LineAssembler.cpp
     ${CMAKE_SOURCE_DIR}/src/sio/SioPrinterEmulator.cpp
+    ${CMAKE_SOURCE_DIR}/platform/linux/FlashConfig.cpp
 )
 
 add_library(printer_driver_core STATIC ${CORE_SOURCES})
-target_include_directories(printer_driver_core PUBLIC ${COMMON_INCLUDE_DIR})
+target_include_directories(printer_driver_core PUBLIC
+    ${COMMON_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/platform/rp2040   # FlashConfig.h (Linux stub satisfies it)
+)
 target_compile_options(printer_driver_core PRIVATE -fno-exceptions -Wall -Wextra)
 target_compile_definitions(printer_driver_core PUBLIC PLATFORM_LINUX)
 

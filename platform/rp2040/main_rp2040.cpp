@@ -12,6 +12,7 @@
 #include "sio/SioPrinterEmulator.h"
 #include "Rp2040UsbTransport.h"
 #include "SioUart.h"
+#include "FlashConfig.h"
 #include "util/Logger.h"
 #include <memory>
 
@@ -146,6 +147,19 @@ int main() {
     // Batch mode accumulates all LPRINT/LLIST lines into one label.
     cfg.labelHeightDots = 4800;
 #endif
+
+    // Auto-load NVM slot 0 on boot (persists user configuration across power cycles).
+    // Falls back to compiled-in defaults if no valid config is stored.
+    {
+        TextConfig nvmCfg;
+        if (FlashConfig::load(0, nvmCfg)) {
+            cfg = nvmCfg;
+            LOG_INFO(TAG, "Boot: NVM slot 0 loaded");
+        } else {
+            LOG_INFO(TAG, "Boot: no NVM config in slot 0, using compiled defaults");
+        }
+    }
+
     auto generator = makeTextGenerator(
 #if   ATARI_PRINTER_PERSONALITY == 1025
         ProtocolType::PCL
@@ -175,7 +189,7 @@ int main() {
     gpio_set_dir(8, GPIO_IN);
     gpio_pull_up(8);
 
-    static SioPrinterEmulator sioEmulator(sioUart, *generator, mode);
+    static SioPrinterEmulator sioEmulator(sioUart, *generator, mode, cfg);
 
     LOG_INFO(TAG, "Entering main loop");
 
@@ -208,6 +222,35 @@ int main() {
         }
 
         sioEmulator.tick();            // SIO state machine
+
+        // ESC ~ P: programmatic print trigger (equivalent to GPIO 8 button)
+        if (sioEmulator.takePrintRequest()) {
+            PrintJob job = generator->flush();
+            if (!job.rawData.empty())
+                manager.submitJob(std::move(job), ProtocolType::TSPL);
+            LOG_INFO(TAG, "ESC~P: label submitted");
+        }
+
+        // ESC ~ S n: save current config to flash slot n
+        uint8_t flashSlot;
+        if (sioEmulator.takeSaveRequest(flashSlot)) {
+            if (FlashConfig::save(flashSlot, sioEmulator.getConfig()))
+                LOG_INFO(TAG, "ESC~S%u: config saved to flash slot %u", flashSlot, flashSlot);
+            else
+                LOG_WARN(TAG, "ESC~S%u: flash save failed", flashSlot);
+        }
+
+        // ESC ~ R n: load config from flash slot n
+        if (sioEmulator.takeLoadRequest(flashSlot)) {
+            TextConfig loaded;
+            if (FlashConfig::load(flashSlot, loaded)) {
+                sioEmulator.setConfig(loaded);
+                LOG_INFO(TAG, "ESC~R%u: config loaded from flash slot %u", flashSlot, flashSlot);
+            } else {
+                LOG_WARN(TAG, "ESC~R%u: no valid config in flash slot %u", flashSlot, flashSlot);
+            }
+        }
+
         manager.tick();                // hot-plug polling (no-op on RP2040)
     }
 }
