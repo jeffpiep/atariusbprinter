@@ -235,11 +235,14 @@ void LineAssembler::ingest(const uint8_t* record, uint8_t len) {
     std::string processed = processRecord(record, len);
 
     if (m_mode == Mode::COL_40) {
-        // Config-only records (empty after ESC stripping) produce no label.
         if (!processed.empty()) {
             flushConfigIfDirty();
             m_generator.writeLine(processed);
+        } else if (m_generator.protocol() == ProtocolType::ESCPOS) {
+            // Blank LPRINT "" → send one LF so the paper advances one line.
+            m_generator.writeBlank();
         }
+        // TSPL: config-only empty records produce no label (unchanged).
         return;
     }
 

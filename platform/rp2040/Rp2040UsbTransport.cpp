@@ -51,6 +51,7 @@ bool Rp2040UsbTransport::open(const UsbDeviceDescriptor& dev) {
             m_epIn     = s_devices[i].epIn;
             m_hasEpIn  = s_devices[i].hasEpIn;
             m_open     = true;
+            m_txDone   = true; // not mid-transfer; safe to begin first write
             LOG_INFO(TAG, "Opened addr=%u", m_devAddr);
             return true;
         }
@@ -63,6 +64,7 @@ bool Rp2040UsbTransport::open(const UsbDeviceDescriptor& dev) {
             m_epIn     = s_devices[i].epIn;
             m_hasEpIn  = s_devices[i].hasEpIn;
             m_open     = true;
+            m_txDone   = true; // not mid-transfer; safe to begin first write
             LOG_INFO(TAG, "Opened (fallback) addr=%u", m_devAddr);
             return true;
         }
@@ -133,6 +135,37 @@ int Rp2040UsbTransport::write(const uint8_t* data, size_t len, uint32_t timeout_
         offset += static_cast<size_t>(m_txResult);
     }
     return static_cast<int>(offset);
+}
+
+bool Rp2040UsbTransport::beginWrite(const uint8_t* data, size_t len) {
+    if (!m_open) { LOG_ERROR(TAG, "beginWrite: not open"); return false; }
+    if (len > RP2040_MAX_PACKET) len = RP2040_MAX_PACKET;
+
+    for (size_t i = 0; i < len; ++i) s_txBuf[i] = data[i];
+
+    m_txDone   = false;
+    m_txResult = 0;
+
+    tuh_xfer_t xfer = {};
+    xfer.daddr       = m_devAddr;
+    xfer.ep_addr     = m_epOut;
+    xfer.buffer      = s_txBuf;
+    xfer.buflen      = static_cast<uint16_t>(len);
+    xfer.complete_cb = &Rp2040UsbTransport::transferCallback;
+    xfer.user_data   = reinterpret_cast<uintptr_t>(this);
+
+    if (!tuh_edpt_xfer(&xfer)) {
+        LOG_ERROR(TAG, "beginWrite: tuh_edpt_xfer failed");
+        m_txDone = true; // not busy
+        return false;
+    }
+    return true;
+}
+
+bool Rp2040UsbTransport::pollWrite() {
+    if (m_txDone) return true;
+    tuh_task();
+    return m_txDone;
 }
 
 int Rp2040UsbTransport::read(uint8_t* buf, size_t maxLen, uint32_t timeout_ms) {

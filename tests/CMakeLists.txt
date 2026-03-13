@@ -57,3 +57,6 @@ add_driver_test(test_sio_printer_emulator test_sio_printer_emulator.cpp)
 
 # Phase 7 — ESC ~ TSPL config sequences
 add_driver_test(test_line_assembler_esc  test_line_assembler_esc.cpp)
+
+# Phase 9 — ESC/POS thermal generator (line-oriented)
+add_driver_test(test_escpos_text_generator2 test_escpos_text_generator2.cpp)

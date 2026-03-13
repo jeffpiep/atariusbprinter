@@ -13,6 +13,7 @@ set(CORE_SOURCES
     ${CMAKE_SOURCE_DIR}/src/generator/TsplTextGenerator.cpp
     ${CMAKE_SOURCE_DIR}/src/generator/PclTextGenerator.cpp
     ${CMAKE_SOURCE_DIR}/src/generator/EscpTextGenerator.cpp
+    ${CMAKE_SOURCE_DIR}/src/generator/EscposTextGenerator.cpp
     ${CMAKE_SOURCE_DIR}/src/sio/SioProtocol.cpp
     ${CMAKE_SOURCE_DIR}/src/sio/AtasciiConverter.cpp
     ${CMAKE_SOURCE_DIR}/src/sio/LineAssembler.cpp

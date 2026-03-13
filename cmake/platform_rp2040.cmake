@@ -12,9 +12,11 @@ set(CORE_SOURCES
     ${CMAKE_SOURCE_DIR}/src/protocol/EscpHandler.cpp
     ${CMAKE_SOURCE_DIR}/src/manager/PrinterManager.cpp
     ${CMAKE_SOURCE_DIR}/src/util/Logger.cpp
+    ${CMAKE_SOURCE_DIR}/src/generator/ITextGenerator.cpp
     ${CMAKE_SOURCE_DIR}/src/generator/TsplTextGenerator.cpp
     ${CMAKE_SOURCE_DIR}/src/generator/PclTextGenerator.cpp
     ${CMAKE_SOURCE_DIR}/src/generator/EscpTextGenerator.cpp
+    ${CMAKE_SOURCE_DIR}/src/generator/EscposTextGenerator.cpp
     ${CMAKE_SOURCE_DIR}/src/sio/SioProtocol.cpp
     ${CMAKE_SOURCE_DIR}/src/sio/AtasciiConverter.cpp
     ${CMAKE_SOURCE_DIR}/src/sio/LineAssembler.cpp
