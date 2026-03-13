@@ -47,6 +47,7 @@ set(CORE_SOURCES
     ${PRINTER_ROOT}/src/generator/TsplTextGenerator.cpp
     ${PRINTER_ROOT}/src/generator/PclTextGenerator.cpp
     ${PRINTER_ROOT}/src/generator/EscpTextGenerator.cpp
+    ${PRINTER_ROOT}/src/generator/EscposTextGenerator.cpp
     ${PRINTER_ROOT}/src/sio/SioProtocol.cpp
     ${PRINTER_ROOT}/src/sio/AtasciiConverter.cpp
     ${PRINTER_ROOT}/src/sio/LineAssembler.cpp
@@ -73,7 +74,7 @@ target_include_directories(usbprinter PRIVATE
 
 target_compile_definitions(usbprinter PRIVATE
     PLATFORM_RP2040
-    ATARI_PRINTER_PERSONALITY=TSPL
+    ATARI_PRINTER_PERSONALITY=1028
 )
 
 target_compile_options(usbprinter PRIVATE
@@ -96,3 +97,47 @@ pico_enable_stdio_usb(usbprinter 0)
 
 pico_add_extra_outputs(usbprinter)
 
+# ── USB-only smoke test target (no SIO, no LineAssembler) ─────────────────────
+# Flash this to verify USB write path independently of SIO timing.
+# Monitor output via UART (GPIO 0/1, 115200 baud).
+set(USB_TEST_SOURCES
+    ${PRINTER_ROOT}/src/transport/UsbDeviceDescriptor.cpp
+    ${PRINTER_ROOT}/src/util/Logger.cpp
+    ${PRINTER_ROOT}/platform/rp2040/Rp2040UsbTransport.cpp
+    ${PRINTER_ROOT}/platform/rp2040/main_rp2040_usb_test.cpp
+    ${PRINTER_ROOT}/platform/rp2040/posix_stubs.c
+)
+
+add_executable(usbprinter_usb_test ${USB_TEST_SOURCES})
+
+pico_set_program_name(usbprinter_usb_test "usbprinter_usb_test")
+pico_set_program_version(usbprinter_usb_test "0.1")
+
+target_include_directories(usbprinter_usb_test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+    ${PRINTER_ROOT}/include
+    ${PRINTER_ROOT}/platform/rp2040
+)
+
+target_compile_definitions(usbprinter_usb_test PRIVATE
+    PLATFORM_RP2040
+    PLATFORM_RP2040_USB_TEST
+)
+
+target_compile_options(usbprinter_usb_test PRIVATE
+    -fno-exceptions
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-statics>
+    -Wall
+    -Wextra
+)
+
+target_link_libraries(usbprinter_usb_test PRIVATE
+    pico_stdlib
+    tinyusb_host
+    tinyusb_board
+)
+
+pico_enable_stdio_uart(usbprinter_usb_test 1)
+pico_enable_stdio_usb(usbprinter_usb_test 0)
+
+pico_add_extra_outputs(usbprinter_usb_test)

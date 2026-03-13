@@ -148,9 +148,9 @@ void PrinterManager::tick() {
 IProtocolHandler* PrinterManager::findHandlerByType(ProtocolType proto) {
     for (auto& h : m_handlers) {
         const char* n = h->name();
-        if (proto == ProtocolType::TSPL && n[0]=='T') return h.get();
-        if (proto == ProtocolType::PCL  && n[0]=='P') return h.get();
-        if (proto == ProtocolType::ESCP && n[0]=='E') return h.get();
+        if (proto == ProtocolType::TSPL                                   && n[0]=='T') return h.get();
+        if (proto == ProtocolType::PCL                                    && n[0]=='P') return h.get();
+        if ((proto == ProtocolType::ESCP || proto == ProtocolType::ESCPOS) && n[0]=='E') return h.get();
     }
     return nullptr;
 }
@@ -239,7 +239,8 @@ bool PrinterManager::submitJob(PrintJob job, ProtocolType hint) {
         const char* n = handler->name();
         if      (n[0]=='T') record->detectedProtocol = ProtocolType::TSPL;
         else if (n[0]=='P') record->detectedProtocol = ProtocolType::PCL;
-        else if (n[0]=='E') record->detectedProtocol = ProtocolType::ESCP;
+        else if (n[0]=='E') record->detectedProtocol =
+            (hint == ProtocolType::ESCPOS) ? ProtocolType::ESCPOS : ProtocolType::ESCP;
     }
 
 #ifndef PLATFORM_RP2040

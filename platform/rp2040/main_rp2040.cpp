@@ -131,8 +131,12 @@ int main() {
     Logger::setLevel(LogLevel::INFO);
     LOG_INFO(TAG, "USB Printer Driver RP2040 starting");
 
-    // Printer manager owns the transport (heap-allocated, never freed)
-    static PrinterManager manager(std::make_unique<Rp2040UsbTransport>());
+    // Printer manager owns the transport (static lifetime on RP2040).
+    // Keep a raw pointer for direct async writes in the ESC/POS path —
+    // the manager takes ownership via unique_ptr but the object never moves.
+    auto transportPtr = std::make_unique<Rp2040UsbTransport>();
+    Rp2040UsbTransport* rawTransport = transportPtr.get();
+    static PrinterManager manager(std::move(transportPtr));
     g_manager = &manager;
 
     // Register handlers in specificity order: TSPL → ESCP → PCL
@@ -165,6 +169,8 @@ int main() {
         ProtocolType::PCL
 #elif ATARI_PRINTER_PERSONALITY == TSPL
         ProtocolType::TSPL
+#elif ATARI_PRINTER_PERSONALITY == 1028
+        ProtocolType::ESCPOS  // 80mm thermal receipt printer (line-oriented, like Atari 820)
 #else
         ProtocolType::ESCP   // 825 and 1027
 #endif
@@ -193,7 +199,25 @@ int main() {
 
     LOG_INFO(TAG, "Entering main loop");
 
-    static uint32_t s_lastButtonMs = 0;
+    static uint32_t s_lastButtonMs  = 0;
+    static bool     s_buttonWasDown = false;
+
+    // ESC/POS batch flush threshold. Lines accumulate after each SIO tick;
+    // they are sent as one USB transfer when no new data arrives for this long.
+    // 1000ms is long enough that a pause between separate LPRINT statements
+    // doesn't split a batch prematurely, yet is still fast from the user's view.
+    // NOTE: intentionally NOT based on lastActivityMs() — that timer resets on
+    // STATUS polls too, so it never goes quiet while P: is open.
+    static constexpr uint32_t ESCPOS_FLUSH_MS = 1000;
+
+    // s_accumBuf: lines accumulate here as they arrive from the SIO tick.
+    // s_escposDataMs: time of the last append (0 = nothing pending).
+    static std::vector<uint8_t> s_accumBuf;
+    static uint32_t             s_escposDataMs  = 0;
+
+    // Async write state — pending batch drained one RP2040_MAX_PACKET chunk per iteration.
+    static std::vector<uint8_t> s_escposJob;
+    static size_t               s_escposOffset = 0;
 
     while (true) {
         tuh_task();                    // TinyUSB host tick
@@ -204,31 +228,97 @@ int main() {
             processPendingMount(addr, manager);
         }
 
-        // GPIO 8 (active-low): user signals end of print job.
-        // Guards:
-        //   - 5-second debounce window avoids multiple triggering of flush().
-        //   - 2-second SIO-quiet guard refuses presses while the Atari is
-        //     actively printing; the ~37ms USB write would block tick() and
-        //     cause the next SIO command to time out (Error 138).
-        uint32_t nowMs = to_ms_since_boot(get_absolute_time());
-        if (!gpio_get(8)
-            && (nowMs - s_lastButtonMs) > 5000
-            && (nowMs - sioEmulator.lastActivityMs()) > 2000) {
-            s_lastButtonMs = nowMs;
-            PrintJob job = generator->flush();
-            if (!job.rawData.empty())
-                manager.submitJob(std::move(job), ProtocolType::TSPL);
-            LOG_INFO(TAG, "Button: label submitted");
+        // GPIO 8 (active-low):
+        // ESC/POS: ignored while accumulating or sending. Once the batch has
+        //   been fully sent (both buffers empty, data timer cleared), a press
+        //   queues a partial cut (GS V 66 0). Debounce: 5-second re-arm.
+        // Other personalities: flush label via manager; 5s debounce + 2s SIO silence.
+        uint32_t nowMs   = to_ms_since_boot(get_absolute_time());
+        bool     btnDown = !gpio_get(8);
+        // Detect press edge and suppress contact bounce: require 200ms quiet since
+        // the last accepted edge before recognising a new one.
+        bool     btnEdge = btnDown && !s_buttonWasDown
+                           && (nowMs - s_lastButtonMs) > 200;
+        s_buttonWasDown  = btnDown;
+
+        if (btnEdge) {
+            s_lastButtonMs = nowMs; // start debounce window for both paths
+            if (generator->protocol() == ProtocolType::ESCPOS) {
+                // Idle state already proves SIO is quiet; act immediately.
+                // Ignore while accumulating or sending.
+                if (s_accumBuf.empty() && s_escposJob.empty() && s_escposDataMs == 0) {
+                    static const uint8_t cut[] = { 0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00 }; // 4×LF + GS V 66 0 partial cut
+                    s_escposJob.assign(cut, cut + sizeof(cut));
+                    s_escposOffset = 0;
+                    LOG_INFO(TAG, "Button: partial cut queued");
+                }
+            } else if ((nowMs - sioEmulator.lastActivityMs()) > 1000) {
+                PrintJob job = generator->flush();
+                if (!job.rawData.empty())
+                    manager.submitJob(std::move(job), generator->protocol());
+                LOG_INFO(TAG, "Button: label submitted");
+            }
         }
 
         sioEmulator.tick();            // SIO state machine
 
+        // ESC/POS: drain generator into accumulation buffer after every tick.
+        // writeLine() appends to the generator's internal buffer; flush() moves it here.
+        // We stamp the time so the quiet-timer knows when the last data arrived.
+        if (generator->protocol() == ProtocolType::ESCPOS) {
+            PrintJob job = generator->flush();
+            if (!job.rawData.empty()) {
+                s_accumBuf.insert(s_accumBuf.end(), job.rawData.begin(), job.rawData.end());
+                s_escposDataMs = nowMs;
+            }
+        }
+
+        // ESC/POS: when data has been quiet for ESCPOS_FLUSH_MS, send the batch.
+        // Using s_escposDataMs (updated only on real data) — not lastActivityMs()
+        // which resets on STATUS polls and prevents the timer from ever expiring.
+        if (generator->protocol() == ProtocolType::ESCPOS &&
+            !s_accumBuf.empty() &&
+            s_escposJob.empty() &&
+            s_escposDataMs > 0 &&
+            (nowMs - s_escposDataMs) > ESCPOS_FLUSH_MS) {
+            s_escposJob    = std::move(s_accumBuf);
+            s_accumBuf     = {};
+            s_escposDataMs = 0;
+            s_escposOffset = 0;
+        }
+
+        // Drain pending ESC/POS job one chunk per iteration (non-blocking).
+        if (!s_escposJob.empty() && !rawTransport->isBusy()) {
+            size_t remaining = s_escposJob.size() - s_escposOffset;
+            size_t chunk = remaining < RP2040_MAX_PACKET ? remaining : RP2040_MAX_PACKET;
+            if (rawTransport->beginWrite(s_escposJob.data() + s_escposOffset, chunk)) {
+                s_escposOffset += chunk;
+                if (s_escposOffset >= s_escposJob.size()) {
+                    s_escposJob.clear();
+                    s_escposOffset = 0;
+                }
+            }
+        }
+
         // ESC ~ P: programmatic print trigger (equivalent to GPIO 8 button)
         if (sioEmulator.takePrintRequest()) {
-            PrintJob job = generator->flush();
-            if (!job.rawData.empty())
-                manager.submitJob(std::move(job), ProtocolType::TSPL);
-            LOG_INFO(TAG, "ESC~P: label submitted");
+            if (generator->protocol() == ProtocolType::ESCPOS) {
+                PrintJob job = generator->flush();
+                if (!job.rawData.empty())
+                    s_accumBuf.insert(s_accumBuf.end(), job.rawData.begin(), job.rawData.end());
+                if (!s_accumBuf.empty() && s_escposJob.empty()) {
+                    s_escposJob    = std::move(s_accumBuf);
+                    s_accumBuf     = {};
+                    s_escposDataMs = 0;
+                    s_escposOffset = 0;
+                }
+                LOG_INFO(TAG, "ESC~P: ESCPOS batch queued");
+            } else {
+                PrintJob job = generator->flush();
+                if (!job.rawData.empty())
+                    manager.submitJob(std::move(job), generator->protocol());
+                LOG_INFO(TAG, "ESC~P: label submitted");
+            }
         }
 
         // ESC ~ S n: save current config to flash slot n

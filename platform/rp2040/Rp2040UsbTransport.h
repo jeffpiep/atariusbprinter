@@ -27,6 +27,13 @@ public:
                         uint8_t epOut, uint8_t epIn, bool hasEpIn);
     static void onUnmount(uint8_t devAddr);
 
+    // Non-blocking async write API for use in cooperative main loops.
+    // beginWrite() queues one chunk (≤ RP2040_MAX_PACKET bytes).
+    // Call pollWrite() each iteration until isBusy() returns false.
+    bool beginWrite(const uint8_t* data, size_t len);
+    bool pollWrite();  // pumps tuh_task(); returns true when transfer done
+    bool isBusy() const { return m_open && !m_txDone; }
+
 private:
     // Transfer completion callback (static, registered per transfer).
     static void transferCallback(tuh_xfer_t* xfer);
