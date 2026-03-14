@@ -9,6 +9,11 @@
 #include "protocol/ProtocolType.h"
 #include "generator/ITextGenerator.h"
 #include "generator/TextConfig.h"
+#if ATARI_PRINTER_PERSONALITY == 1028 && __has_include("generator/EscposFontData.h")
+#  include "generator/EscposFontData.h"
+#  include "generator/EscposTextGenerator.h"
+#  define HAVE_ESCPOS_FONT_DATA 1
+#endif
 #include "sio/SioPrinterEmulator.h"
 #include "Rp2040UsbTransport.h"
 #include "SioUart.h"
@@ -177,6 +182,11 @@ int main() {
     );
     generator->configure(cfg);
 
+#if defined(HAVE_ESCPOS_FONT_DATA)
+    static_cast<EscposTextGenerator*>(generator.get())
+        ->setCustomFont(kEscposFontDownload, kEscposFontDownloadSize);
+#endif
+
     // SIO emulator
     LineAssembler::Mode mode =
 #if ATARI_PRINTER_PERSONALITY == 1025
@@ -202,22 +212,19 @@ int main() {
     static uint32_t s_lastButtonMs  = 0;
     static bool     s_buttonWasDown = false;
 
-    // ESC/POS batch flush threshold. Lines accumulate after each SIO tick;
-    // they are sent as one USB transfer when no new data arrives for this long.
-    // 1000ms is long enough that a pause between separate LPRINT statements
-    // doesn't split a batch prematurely, yet is still fast from the user's view.
-    // NOTE: intentionally NOT based on lastActivityMs() — that timer resets on
-    // STATUS polls too, so it never goes quiet while P: is open.
+    // ESC/POS: lines accumulate here after each SIO tick; sent as one blocking
+    // write when no new data arrives for ESCPOS_FLUSH_MS.
+    // Blocking write (~3ms for a 40-char line) is well within the ~68ms SIO
+    // inter-cycle window, so it does not risk SIO Error 138.
     static constexpr uint32_t ESCPOS_FLUSH_MS = 1000;
-
-    // s_accumBuf: lines accumulate here as they arrive from the SIO tick.
-    // s_escposDataMs: time of the last append (0 = nothing pending).
     static std::vector<uint8_t> s_accumBuf;
-    static uint32_t             s_escposDataMs  = 0;
+    static uint32_t             s_escposDataMs = 0;
 
-    // Async write state — pending batch drained one RP2040_MAX_PACKET chunk per iteration.
-    static std::vector<uint8_t> s_escposJob;
-    static size_t               s_escposOffset = 0;
+#if defined(HAVE_ESCPOS_FONT_DATA)
+    // Set on printer attach; consumed one iteration later so tuh_task() gets
+    // a clean cycle before we call write() (avoids TinyUSB state conflict).
+    static bool s_pendingTestPrint = false;
+#endif
 
     while (true) {
         tuh_task();                    // TinyUSB host tick
@@ -226,31 +233,50 @@ int main() {
             uint8_t addr = s_pendingMountAddr;
             s_pendingMountAddr = 0;
             processPendingMount(addr, manager);
+#if defined(HAVE_ESCPOS_FONT_DATA)
+            s_pendingTestPrint = true;  // defer write to next iteration
+#endif
         }
 
-        // GPIO 8 (active-low):
-        // ESC/POS: ignored while accumulating or sending. Once the batch has
-        //   been fully sent (both buffers empty, data timer cleared), a press
-        //   queues a partial cut (GS V 66 0). Debounce: 5-second re-arm.
-        // Other personalities: flush label via manager; 5s debounce + 2s SIO silence.
+#if defined(HAVE_ESCPOS_FONT_DATA)
+        if (s_pendingTestPrint) {
+            s_pendingTestPrint = false;
+            // On attach: download custom font then print a test line.
+            // ESC @ init → ESC & font → ESC % 1 activate → test text → feed → cut.
+            static constexpr uint8_t kInit[]     = { 0x1B, 0x40 };
+            static constexpr uint8_t kActivate[] = { 0x1B, 0x25, 0x01 };
+            static constexpr uint8_t kText[]     = "HELLO WORLD\n";
+            static constexpr uint8_t kFeed[]     = { 0x1B, 0x64, 0x04 };
+            static constexpr uint8_t kCut[]      = { 0x1D, 0x56, 0x42, 0x00 };
+            int r = 0;
+            r += rawTransport->write(kInit,             sizeof(kInit));
+            r += rawTransport->write(kEscposFontDownload, kEscposFontDownloadSize);
+            r += rawTransport->write(kActivate,         sizeof(kActivate));
+            r += rawTransport->write(kText,             sizeof(kText) - 1);
+            r += rawTransport->write(kFeed,             sizeof(kFeed));
+            r += rawTransport->write(kCut,              sizeof(kCut));
+            static_cast<EscposTextGenerator*>(generator.get())->markFontDownloaded();
+            LOG_INFO(TAG, "Attach: font+test print %s (%d bytes)",
+                     r > 0 ? "OK" : "FAILED", r);
+        }
+#endif
+
         uint32_t nowMs   = to_ms_since_boot(get_absolute_time());
         bool     btnDown = !gpio_get(8);
-        // Detect press edge and suppress contact bounce: require 200ms quiet since
-        // the last accepted edge before recognising a new one.
         bool     btnEdge = btnDown && !s_buttonWasDown
                            && (nowMs - s_lastButtonMs) > 200;
         s_buttonWasDown  = btnDown;
 
         if (btnEdge) {
-            s_lastButtonMs = nowMs; // start debounce window for both paths
+            s_lastButtonMs = nowMs;
             if (generator->protocol() == ProtocolType::ESCPOS) {
-                // Idle state already proves SIO is quiet; act immediately.
-                // Ignore while accumulating or sending.
-                if (s_accumBuf.empty() && s_escposJob.empty() && s_escposDataMs == 0) {
-                    static const uint8_t cut[] = { 0x0A, 0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00 }; // 4×LF + GS V 66 0 partial cut
-                    s_escposJob.assign(cut, cut + sizeof(cut));
-                    s_escposOffset = 0;
-                    LOG_INFO(TAG, "Button: partial cut queued");
+                if (s_accumBuf.empty() && s_escposDataMs == 0) {
+                    static const uint8_t cut[] = {
+                        0x0A, 0x0A, 0x0A, 0x0A,       // 4 × LF
+                        0x1D, 0x56, 0x42, 0x00         // GS V 66 0 partial cut
+                    };
+                    rawTransport->write(cut, sizeof(cut));
+                    LOG_INFO(TAG, "Button: partial cut sent");
                 }
             } else if ((nowMs - sioEmulator.lastActivityMs()) > 1000) {
                 PrintJob job = generator->flush();
@@ -262,9 +288,7 @@ int main() {
 
         sioEmulator.tick();            // SIO state machine
 
-        // ESC/POS: drain generator into accumulation buffer after every tick.
-        // writeLine() appends to the generator's internal buffer; flush() moves it here.
-        // We stamp the time so the quiet-timer knows when the last data arrived.
+        // ESC/POS: accumulate lines from generator after each tick.
         if (generator->protocol() == ProtocolType::ESCPOS) {
             PrintJob job = generator->flush();
             if (!job.rawData.empty()) {
@@ -273,46 +297,31 @@ int main() {
             }
         }
 
-        // ESC/POS: when data has been quiet for ESCPOS_FLUSH_MS, send the batch.
-        // Using s_escposDataMs (updated only on real data) — not lastActivityMs()
-        // which resets on STATUS polls and prevents the timer from ever expiring.
+        // ESC/POS: flush accumulated lines once SIO goes quiet for ESCPOS_FLUSH_MS.
+        // Using s_escposDataMs (data-only timer) instead of lastActivityMs() which
+        // resets on STATUS polls and never goes quiet while P: is open.
         if (generator->protocol() == ProtocolType::ESCPOS &&
             !s_accumBuf.empty() &&
-            s_escposJob.empty() &&
             s_escposDataMs > 0 &&
             (nowMs - s_escposDataMs) > ESCPOS_FLUSH_MS) {
-            s_escposJob    = std::move(s_accumBuf);
-            s_accumBuf     = {};
+            rawTransport->write(s_accumBuf.data(), s_accumBuf.size());
+            s_accumBuf.clear();
             s_escposDataMs = 0;
-            s_escposOffset = 0;
+            LOG_INFO(TAG, "ESC/POS: batch sent");
         }
 
-        // Drain pending ESC/POS job one chunk per iteration (non-blocking).
-        if (!s_escposJob.empty() && !rawTransport->isBusy()) {
-            size_t remaining = s_escposJob.size() - s_escposOffset;
-            size_t chunk = remaining < RP2040_MAX_PACKET ? remaining : RP2040_MAX_PACKET;
-            if (rawTransport->beginWrite(s_escposJob.data() + s_escposOffset, chunk)) {
-                s_escposOffset += chunk;
-                if (s_escposOffset >= s_escposJob.size()) {
-                    s_escposJob.clear();
-                    s_escposOffset = 0;
-                }
-            }
-        }
-
-        // ESC ~ P: programmatic print trigger (equivalent to GPIO 8 button)
+        // ESC ~ P: immediate print trigger (equivalent to GPIO 8 button)
         if (sioEmulator.takePrintRequest()) {
             if (generator->protocol() == ProtocolType::ESCPOS) {
                 PrintJob job = generator->flush();
                 if (!job.rawData.empty())
                     s_accumBuf.insert(s_accumBuf.end(), job.rawData.begin(), job.rawData.end());
-                if (!s_accumBuf.empty() && s_escposJob.empty()) {
-                    s_escposJob    = std::move(s_accumBuf);
-                    s_accumBuf     = {};
+                if (!s_accumBuf.empty()) {
+                    rawTransport->write(s_accumBuf.data(), s_accumBuf.size());
+                    s_accumBuf.clear();
                     s_escposDataMs = 0;
-                    s_escposOffset = 0;
                 }
-                LOG_INFO(TAG, "ESC~P: ESCPOS batch queued");
+                LOG_INFO(TAG, "ESC~P: ESCPOS batch sent");
             } else {
                 PrintJob job = generator->flush();
                 if (!job.rawData.empty())

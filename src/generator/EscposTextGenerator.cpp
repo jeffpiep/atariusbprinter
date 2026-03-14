@@ -6,13 +6,27 @@ void EscposTextGenerator::configure(const TextConfig& config) {
     reset();
 }
 
+void EscposTextGenerator::setCustomFont(const uint8_t* data, size_t size) {
+    m_fontData       = data;
+    m_fontSize       = size;
+    m_fontDownloaded = false;
+}
+
 void EscposTextGenerator::reset() {
     m_buf.clear();
     m_lineSpacingSet = false;
+    m_fontDownloaded = false; // re-download on next use (printer may have power-cycled)
 }
 
 void EscposTextGenerator::writeLine(std::string_view line) {
     if (!m_configured) { TextConfig def; configure(def); }
+
+    // Download custom font once per session (cleared by reset() on printer reconnect).
+    if (m_fontData && !m_fontDownloaded) {
+        m_buf.insert(m_buf.end(), m_fontData, m_fontData + m_fontSize);
+        m_buf.push_back(0x1B); m_buf.push_back(0x25); m_buf.push_back(0x01); // ESC % 1
+        m_fontDownloaded = true;
+    }
 
     // Set line spacing once per session so consecutive LPRINT lines print
     // without extra gap. ESC 2 = default 1/6-inch line spacing (6 LPI).
