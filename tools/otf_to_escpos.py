@@ -46,8 +46,7 @@ def render_glyph(font, char, threshold, render_w=None):
       render_w == CELL_W → draw directly; no crop needed
       render_w < CELL_W  → draw on narrower canvas; glyph centered via x_offset padding
 
-    Y: the canvas is always CELL_H=24 tall.  When the font's point size exceeds 24,
-    Pillow naturally clips the top overflow — this is the intended "Y crop" behavior.
+    Y: the canvas is always CELL_H=24 tall.  Content that overflows the bottom is clipped.
 
     Returns a list of 36 bytes in ESC & column-major format:
       column 0 bytes 0-2, column 1 bytes 0-2, ..., column 11 bytes 0-2
@@ -63,21 +62,15 @@ def render_glyph(font, char, threshold, render_w=None):
     bbox = font.getbbox(char)
     char_w = bbox[2] - bbox[0]
 
-    # Center horizontally; align so descenders land near the bottom
-    # Use the font ascent to place baseline ~20 dots from top (leaving 4 for descenders)
+    # Place baseline so descenders land near the bottom of the cell.
     try:
         ascent, descent = font.getmetrics()
     except AttributeError:
         ascent, descent = CELL_H - 4, 4
 
-    if ascent + descent > CELL_H:
-        # Top-anchor (bottom-clip): pin glyph top to row 0; rows past CELL_H clip at bottom.
-        baseline_y = ascent
-    else:
-        # Bottom-anchor (default): baseline near bottom of cell; extra space goes at top.
-        baseline_y = CELL_H - descent - 1
+    baseline_y = CELL_H - descent - 1
     x_offset = max(0, (render_w - char_w) // 2) - bbox[0]
-    y_offset = baseline_y - ascent - bbox[1]
+    y_offset = baseline_y - ascent
 
     draw.text((x_offset, y_offset), char, font=font, fill=255)
 
@@ -261,8 +254,8 @@ def main():
     parser.add_argument("--point-size", type=int, default=None,
                         help="Font point size for both axes (default: auto-fit to 24 dots height)")
     parser.add_argument("--point-size-y", type=int, default=None,
-                        help="Vertical point size only — controls height in the 24-dot cell "
-                             "(overrides --point-size for height; auto-fit if omitted)")
+                        help="Vertical point size only — controls glyph height; baseline is "
+                             "anchored to the bottom of the 24-dot cell (overrides --point-size)")
     parser.add_argument("--point-size-x", type=int, default=None,
                         help="Horizontal point size — renders onto a proportionally scaled canvas "
                              "then resamples to 12 dots (overrides --point-size for width). "
