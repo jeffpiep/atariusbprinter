@@ -26,6 +26,10 @@ public:
     // Clear buffer without emitting. Does NOT reset ESC ~ config state.
     void reset();
 
+    // Replace the generator used for output. Call when the protocol changes
+    // at runtime (e.g. after USB printer auto-detection).
+    void setGenerator(ITextGenerator& gen);
+
     // Returns true (once) if an ESC ~ P sequence was received since last call.
     bool takePrintRequest();
 
@@ -50,7 +54,7 @@ private:
     void flushConfigIfDirty();
 
     Mode            m_mode;
-    ITextGenerator& m_generator;
+    ITextGenerator* m_generator;
     std::string     m_halfLine;
     bool            m_halfPending = false;
 

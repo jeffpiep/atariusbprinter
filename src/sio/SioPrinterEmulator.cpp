@@ -33,7 +33,6 @@ SioPrinterEmulator::SioPrinterEmulator(ISioPort& port,
                                         LineAssembler::Mode colMode,
                                         const TextConfig& defaultConfig)
     : m_port(port)
-    , m_generator(generator)
     , m_assembler(colMode, generator, defaultConfig)
 {}
 
@@ -46,6 +45,10 @@ void SioPrinterEmulator::reset() {
     m_pendingCmd = 0;
     m_lastAux1   = 0;
     m_lastCmdMs  = 0;
+}
+
+void SioPrinterEmulator::setGenerator(ITextGenerator& gen) {
+    m_assembler.setGenerator(gen);
 }
 
 bool SioPrinterEmulator::recvBytes(uint8_t* buf, uint8_t count, uint32_t timeoutUs) {

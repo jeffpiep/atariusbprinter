@@ -9,7 +9,7 @@
 #include "protocol/ProtocolType.h"
 #include "generator/ITextGenerator.h"
 #include "generator/TextConfig.h"
-#if ATARI_PRINTER_PERSONALITY == 1028 && __has_include("generator/EscposFontData.h")
+#if __has_include("generator/EscposFontData.h")
 #  include "generator/EscposFontData.h"
 #  include "generator/EscposTextGenerator.h"
 #  define HAVE_ESCPOS_FONT_DATA 1
@@ -49,6 +49,37 @@ void tuh_umount_cb(uint8_t devAddr) {
 }
 
 } // extern "C"
+
+// ── Protocol auto-detection ───────────────────────────────────────────────────
+
+// Look up the attached printer's protocol from its VID/PID.
+// Falls back to the compile-time personality for unknown devices.
+static ProtocolType detectProtocol(uint8_t devAddr) {
+    uint16_t vid = 0, pid = 0;
+    tuh_vid_pid_get(devAddr, &vid, &pid);
+    LOG_INFO(TAG, "USB printer VID=0x%04x PID=0x%04x", vid, pid);
+
+    struct KnownPrinter { uint16_t vid, pid; ProtocolType proto; };
+    static const KnownPrinter kKnown[] = {
+        { 0x09c6, 0x0426, ProtocolType::TSPL   },  // AiYin LabelPrinter
+        { 0x0483, 0x5720, ProtocolType::ESCPOS  },  // POS80 80mm thermal receipt
+    };
+    for (auto& k : kKnown) {
+        if (k.vid == vid && k.pid == pid) {
+            LOG_INFO(TAG, "Known printer detected → %s",
+                     k.proto == ProtocolType::TSPL ? "TSPL" : "ESCPOS");
+            return k.proto;
+        }
+    }
+    LOG_INFO(TAG, "Unknown printer, using compiled default");
+#if   ATARI_PRINTER_PERSONALITY == 1025
+    return ProtocolType::PCL;
+#elif ATARI_PRINTER_PERSONALITY == TSPL
+    return ProtocolType::TSPL;
+#else
+    return ProtocolType::ESCPOS;
+#endif
+}
 
 // ── Mount processing (called from main loop, safe to call tuh_descriptor_*) ──
 
@@ -183,8 +214,9 @@ int main() {
     generator->configure(cfg);
 
 #if defined(HAVE_ESCPOS_FONT_DATA)
-    static_cast<EscposTextGenerator*>(generator.get())
-        ->setCustomFont(kEscposFontDownload, kEscposFontDownloadSize);
+    if (generator->protocol() == ProtocolType::ESCPOS)
+        static_cast<EscposTextGenerator*>(generator.get())
+            ->setCustomFont(kEscposFontDownload, kEscposFontDownloadSize);
 #endif
 
     // SIO emulator
@@ -220,11 +252,9 @@ int main() {
     static std::vector<uint8_t> s_accumBuf;
     static uint32_t             s_escposDataMs = 0;
 
-#if defined(HAVE_ESCPOS_FONT_DATA)
     // Set on printer attach; consumed one iteration later so tuh_task() gets
     // a clean cycle before we call write() (avoids TinyUSB state conflict).
     static bool s_pendingTestPrint = false;
-#endif
 
     while (true) {
         tuh_task();                    // TinyUSB host tick
@@ -233,26 +263,44 @@ int main() {
             uint8_t addr = s_pendingMountAddr;
             s_pendingMountAddr = 0;
             processPendingMount(addr, manager);
+
+            ProtocolType detected = detectProtocol(addr);
+            if (detected != generator->protocol()) {
+                generator = makeTextGenerator(detected);
+                generator->configure(cfg);
 #if defined(HAVE_ESCPOS_FONT_DATA)
-            s_pendingTestPrint = true;  // defer write to next iteration
+                if (detected == ProtocolType::ESCPOS)
+                    static_cast<EscposTextGenerator*>(generator.get())
+                        ->setCustomFont(kEscposFontDownload, kEscposFontDownloadSize);
 #endif
+                sioEmulator.setGenerator(*generator);
+                // Reset ESC/POS accumulation buffer on protocol switch.
+                s_accumBuf.clear();
+                s_escposDataMs = 0;
+                LOG_INFO(TAG, "Protocol switched to %s",
+                         detected == ProtocolType::TSPL   ? "TSPL"   :
+                         detected == ProtocolType::ESCPOS ? "ESCPOS" : "PCL");
+            }
+            s_pendingTestPrint = true;  // defer font download to next iteration
         }
 
-#if defined(HAVE_ESCPOS_FONT_DATA)
         if (s_pendingTestPrint) {
             s_pendingTestPrint = false;
-            // On attach: reset printer, download custom font, activate it.
-            static constexpr uint8_t kInit[]     = { 0x1B, 0x40 };
-            static constexpr uint8_t kActivate[] = { 0x1B, 0x25, 0x01 };
-            int r = 0;
-            r += rawTransport->write(kInit,               sizeof(kInit));
-            r += rawTransport->write(kEscposFontDownload, kEscposFontDownloadSize);
-            r += rawTransport->write(kActivate,           sizeof(kActivate));
-            static_cast<EscposTextGenerator*>(generator.get())->markFontDownloaded();
-            LOG_INFO(TAG, "Attach: font download %s (%d bytes)",
-                     r > 0 ? "OK" : "FAILED", r);
-        }
+#if defined(HAVE_ESCPOS_FONT_DATA)
+            if (generator->protocol() == ProtocolType::ESCPOS) {
+                // On attach: reset printer, download custom font, activate it.
+                static constexpr uint8_t kInit[]     = { 0x1B, 0x40 };
+                static constexpr uint8_t kActivate[] = { 0x1B, 0x25, 0x01 };
+                int r = 0;
+                r += rawTransport->write(kInit,               sizeof(kInit));
+                r += rawTransport->write(kEscposFontDownload, kEscposFontDownloadSize);
+                r += rawTransport->write(kActivate,           sizeof(kActivate));
+                static_cast<EscposTextGenerator*>(generator.get())->markFontDownloaded();
+                LOG_INFO(TAG, "Attach: font download %s (%d bytes)",
+                         r > 0 ? "OK" : "FAILED", r);
+            }
 #endif
+        }
 
         uint32_t nowMs   = to_ms_since_boot(get_absolute_time());
         bool     btnDown = !gpio_get(8);

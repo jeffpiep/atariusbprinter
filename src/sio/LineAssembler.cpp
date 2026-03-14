@@ -174,14 +174,18 @@ LineAssembler::LineAssembler(Mode mode,
                              ITextGenerator& generator,
                              const TextConfig& defaultConfig)
     : m_mode(mode)
-    , m_generator(generator)
+    , m_generator(&generator)
     , m_defaultConfig(defaultConfig)
     , m_config(defaultConfig)
 {}
 
+void LineAssembler::setGenerator(ITextGenerator& gen) {
+    m_generator = &gen;
+}
+
 void LineAssembler::flushConfigIfDirty() {
-    if (m_configDirty && m_generator.protocol() == ProtocolType::TSPL) {
-        m_generator.configure(m_config);
+    if (m_configDirty && m_generator->protocol() == ProtocolType::TSPL) {
+        m_generator->configure(m_config);
         m_configDirty = false;
     }
 }
@@ -205,7 +209,7 @@ std::string LineAssembler::processRecord(const uint8_t* record, uint8_t len) {
     //    ESC (0x1B) maps to space after conversion — must intercept here.
     //    Sequences are only interpreted for TSPL generators; for PCL/ESC/P
     //    the bytes fall through to toAscii() as normal (0x1B → space).
-    const bool isTspl = (m_generator.protocol() == ProtocolType::TSPL);
+    const bool isTspl = (m_generator->protocol() == ProtocolType::TSPL);
     std::string result;
     result.reserve(effectiveLen);
 
@@ -237,10 +241,10 @@ void LineAssembler::ingest(const uint8_t* record, uint8_t len) {
     if (m_mode == Mode::COL_40) {
         if (!processed.empty()) {
             flushConfigIfDirty();
-            m_generator.writeLine(processed);
-        } else if (m_generator.protocol() == ProtocolType::ESCPOS) {
+            m_generator->writeLine(processed);
+        } else if (m_generator->protocol() == ProtocolType::ESCPOS) {
             // Blank LPRINT "" → send one LF so the paper advances one line.
-            m_generator.writeBlank();
+            m_generator->writeBlank();
         }
         // TSPL: config-only empty records produce no label (unchanged).
         return;
@@ -258,7 +262,7 @@ void LineAssembler::ingest(const uint8_t* record, uint8_t len) {
             // Line ended within first 40 columns OR config-only record
             if (!processed.empty()) {
                 flushConfigIfDirty();
-                m_generator.writeLine(processed);
+                m_generator->writeLine(processed);
             }
             m_halfPending = false;
         } else {
@@ -272,7 +276,7 @@ void LineAssembler::ingest(const uint8_t* record, uint8_t len) {
         m_halfPending = false;
         if (!full.empty()) {
             flushConfigIfDirty();
-            m_generator.writeLine(full);
+            m_generator->writeLine(full);
         }
     }
 }
@@ -281,7 +285,7 @@ void LineAssembler::flush() {
     if (m_halfPending) {
         if (!m_halfLine.empty()) {
             flushConfigIfDirty();
-            m_generator.writeLine(m_halfLine);
+            m_generator->writeLine(m_halfLine);
         }
         m_halfLine.clear();
         m_halfPending = false;

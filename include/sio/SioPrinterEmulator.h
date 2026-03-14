@@ -53,6 +53,10 @@ public:
     // Returns true (once) if ESC ~ R was received; sets slot (0–9).
     bool takeLoadRequest(uint8_t& slot) { return m_assembler.takeLoadRequest(slot); }
 
+    // Replace the generator at runtime (e.g. after USB printer auto-detection).
+    // Also updates the internal LineAssembler to use the new generator.
+    void setGenerator(ITextGenerator& gen);
+
     // Apply an externally-loaded TextConfig (e.g. from flash).
     void setConfig(const TextConfig& cfg) { m_assembler.setConfig(cfg); }
 
@@ -79,7 +83,6 @@ private:
     uint32_t nowMs() const;
 
     ISioPort&       m_port;
-    ITextGenerator& m_generator;
     LineAssembler   m_assembler;
 
     State    m_state       = State::IDLE;
