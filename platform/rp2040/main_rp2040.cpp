@@ -241,22 +241,15 @@ int main() {
 #if defined(HAVE_ESCPOS_FONT_DATA)
         if (s_pendingTestPrint) {
             s_pendingTestPrint = false;
-            // On attach: download custom font then print a test line.
-            // ESC @ init → ESC & font → ESC % 1 activate → test text → feed → cut.
+            // On attach: reset printer, download custom font, activate it.
             static constexpr uint8_t kInit[]     = { 0x1B, 0x40 };
             static constexpr uint8_t kActivate[] = { 0x1B, 0x25, 0x01 };
-            static constexpr uint8_t kText[]     = "HELLO WORLD\n";
-            static constexpr uint8_t kFeed[]     = { 0x1B, 0x64, 0x04 };
-            static constexpr uint8_t kCut[]      = { 0x1D, 0x56, 0x42, 0x00 };
             int r = 0;
-            r += rawTransport->write(kInit,             sizeof(kInit));
+            r += rawTransport->write(kInit,               sizeof(kInit));
             r += rawTransport->write(kEscposFontDownload, kEscposFontDownloadSize);
-            r += rawTransport->write(kActivate,         sizeof(kActivate));
-            r += rawTransport->write(kText,             sizeof(kText) - 1);
-            r += rawTransport->write(kFeed,             sizeof(kFeed));
-            r += rawTransport->write(kCut,              sizeof(kCut));
+            r += rawTransport->write(kActivate,           sizeof(kActivate));
             static_cast<EscposTextGenerator*>(generator.get())->markFontDownloaded();
-            LOG_INFO(TAG, "Attach: font+test print %s (%d bytes)",
+            LOG_INFO(TAG, "Attach: font download %s (%d bytes)",
                      r > 0 ? "OK" : "FAILED", r);
         }
 #endif
