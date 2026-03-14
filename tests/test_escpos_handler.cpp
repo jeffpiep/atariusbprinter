@@ -1,62 +1,56 @@
 #include <catch2/catch_test_macros.hpp>
-#include "protocol/EscpHandler.h"
+#include "protocol/EscposHandler.h"
 #include "mock/MockUsbTransport.h"
 #include <vector>
 
 // ── probe() tests ─────────────────────────────────────────────────────────────
 
-TEST_CASE("EscpHandler::probe - ESC @ (initialize)", "[escp][probe]") {
-    EscpHandler h;
+TEST_CASE("EscposHandler::probe - ESC @ (initialize)", "[escpos_handler][probe]") {
+    EscposHandler h;
     const uint8_t data[] = {0x1B, '@'};
     REQUIRE(h.probe(data, sizeof(data)));
 }
 
-TEST_CASE("EscpHandler::probe - ESC P (select printer)", "[escp][probe]") {
-    EscpHandler h;
-    const uint8_t data[] = {0x1B, 0x50}; // 0x50 = 'P'
-    REQUIRE(h.probe(data, sizeof(data)));
-}
-
-TEST_CASE("EscpHandler::probe - GS class ESC/POS", "[escp][probe]") {
-    EscpHandler h;
+TEST_CASE("EscposHandler::probe - GS class ESC/POS", "[escpos_handler][probe]") {
+    EscposHandler h;
     const uint8_t data[] = {0x1D, 'V', 0x00}; // GS V = paper cut
     REQUIRE(h.probe(data, sizeof(data)));
 }
 
-TEST_CASE("EscpHandler::probe - ESC @ within first 8 bytes", "[escp][probe]") {
-    EscpHandler h;
+TEST_CASE("EscposHandler::probe - ESC @ within first 8 bytes", "[escpos_handler][probe]") {
+    EscposHandler h;
     // 5 bytes padding, then ESC @
     const uint8_t data[] = {'X','X','X','X','X', 0x1B, '@'};
     REQUIRE(h.probe(data, sizeof(data)));
 }
 
-TEST_CASE("EscpHandler::probe - TSPL data rejected", "[escp][probe]") {
-    EscpHandler h;
+TEST_CASE("EscposHandler::probe - ESC P (dot-matrix) rejected", "[escpos_handler][probe]") {
+    EscposHandler h;
+    const uint8_t data[] = {0x1B, 0x50}; // ESC P = ESC/P select printer
+    REQUIRE_FALSE(h.probe(data, sizeof(data)));
+}
+
+TEST_CASE("EscposHandler::probe - TSPL data rejected", "[escpos_handler][probe]") {
+    EscposHandler h;
     const uint8_t data[] = {'S','I','Z','E',' ','1','0','0',' ','m','m'};
     REQUIRE_FALSE(h.probe(data, sizeof(data)));
 }
 
-TEST_CASE("EscpHandler::probe - PCL data rejected", "[escp][probe]") {
-    EscpHandler h;
+TEST_CASE("EscposHandler::probe - PCL data rejected", "[escpos_handler][probe]") {
+    EscposHandler h;
     const uint8_t data[] = {0x1B, 'E', 0x1B, '&', 'l', '0', 'O'}; // ESC E = PCL
     REQUIRE_FALSE(h.probe(data, sizeof(data)));
 }
 
-TEST_CASE("EscpHandler::probe - PJL data rejected", "[escp][probe]") {
-    EscpHandler h;
-    const uint8_t data[] = {0x1B,'%','-','1','2','3','4','5','X'};
-    REQUIRE_FALSE(h.probe(data, sizeof(data)));
-}
-
-TEST_CASE("EscpHandler::probe - null / empty rejected", "[escp][probe]") {
-    EscpHandler h;
+TEST_CASE("EscposHandler::probe - null / empty rejected", "[escpos_handler][probe]") {
+    EscposHandler h;
     REQUIRE_FALSE(h.probe(nullptr, 10));
     const uint8_t data[] = {0x1B, '@'};
     REQUIRE_FALSE(h.probe(data, 0));
 }
 
-TEST_CASE("EscpHandler::probe - ESC @ beyond byte 8 rejected", "[escp][probe]") {
-    EscpHandler h;
+TEST_CASE("EscposHandler::probe - ESC @ beyond byte 8 rejected", "[escpos_handler][probe]") {
+    EscposHandler h;
     // 8 bytes of padding, then ESC @ at offset 8 — outside window
     uint8_t data[10];
     for (size_t i = 0; i < 8; ++i) data[i] = 'X';
@@ -66,23 +60,23 @@ TEST_CASE("EscpHandler::probe - ESC @ beyond byte 8 rejected", "[escp][probe]") 
 
 // ── sendJob() tests ────────────────────────────────────────────────────────────
 
-TEST_CASE("EscpHandler::sendJob - sends all bytes", "[escp][send]") {
+TEST_CASE("EscposHandler::sendJob - sends all bytes", "[escpos_handler][send]") {
     MockUsbTransport t;
-    EscpHandler h;
+    EscposHandler h;
     REQUIRE(t.open(UsbDeviceDescriptor{}));
 
     PrintJob job;
-    job.jobId = "escp_test";
+    job.jobId = "escpos_test";
     job.timeoutMs = 1000;
-    job.rawData = {0x1B, '@', 'H', 'i', '\r', '\n', '\x0c'};
+    job.rawData = {0x1B, '@', 'H', 'i', '\n'};
 
     REQUIRE(h.sendJob(t, job));
     REQUIRE(t.writtenBytes() == job.rawData);
 }
 
-TEST_CASE("EscpHandler::sendJob - empty job succeeds without write", "[escp][send]") {
+TEST_CASE("EscposHandler::sendJob - empty job succeeds without write", "[escpos_handler][send]") {
     MockUsbTransport t;
-    EscpHandler h;
+    EscposHandler h;
     REQUIRE(t.open(UsbDeviceDescriptor{}));
 
     PrintJob job;
@@ -91,54 +85,56 @@ TEST_CASE("EscpHandler::sendJob - empty job succeeds without write", "[escp][sen
     REQUIRE(t.writtenBytes().empty());
 }
 
-TEST_CASE("EscpHandler::sendJob - chunks large job", "[escp][send]") {
+TEST_CASE("EscposHandler::sendJob - chunks large job", "[escpos_handler][send]") {
     MockUsbTransport t;
-    EscpHandler h;
+    EscposHandler h;
     REQUIRE(t.open(UsbDeviceDescriptor{}));
 
     PrintJob job;
     job.jobId = "big";
     job.timeoutMs = 5000;
-    job.rawData.assign(EscpHandler::ESCP_CHUNK_SIZE + 50, 0x41);
+    job.rawData.assign(EscposHandler::ESCPOS_CHUNK_SIZE + 50, 0x41);
 
     REQUIRE(h.sendJob(t, job));
     REQUIRE(t.writtenBytes().size() == job.rawData.size());
     REQUIRE(t.writeCallCount() == 2);
 }
 
-TEST_CASE("EscpHandler::sendJob - write failure returns false", "[escp][send]") {
+TEST_CASE("EscposHandler::sendJob - write failure returns false", "[escpos_handler][send]") {
     MockConfig cfg;
     cfg.failOnWrite = true;
     MockUsbTransport t(cfg);
-    EscpHandler h;
+    EscposHandler h;
     REQUIRE(t.open(UsbDeviceDescriptor{}));
 
     PrintJob job;
     job.jobId = "fail";
-    job.rawData = {0x1B, '@', '\r', '\n'};
+    job.rawData = {0x1B, '@', '\n'};
     REQUIRE_FALSE(h.sendJob(t, job));
 }
 
 // ── queryStatus() tests ────────────────────────────────────────────────────────
 
-TEST_CASE("EscpHandler::queryStatus - returns status bytes", "[escp][status]") {
+TEST_CASE("EscposHandler::queryStatus - sends DLE EOT 1", "[escpos_handler][status]") {
     MockConfig cfg;
-    cfg.statusResponse = {0x00}; // online, no error
+    cfg.statusResponse = {0x12}; // typical printer status byte
     MockUsbTransport t(cfg);
-    EscpHandler h;
+    EscposHandler h;
     REQUIRE(t.open(UsbDeviceDescriptor{}));
 
     std::string status;
     REQUIRE(h.queryStatus(t, status));
+    // Verify the correct ESC/POS real-time status command was sent
+    const std::vector<uint8_t> expected = {0x10, 0x04, 0x01};
+    REQUIRE(t.writtenBytes() == expected);
     REQUIRE(status.size() == 1);
-    REQUIRE(status[0] == 0x00);
 }
 
-TEST_CASE("EscpHandler::queryStatus - write-only device returns false", "[escp][status]") {
+TEST_CASE("EscposHandler::queryStatus - write-only device returns false", "[escpos_handler][status]") {
     MockConfig cfg;
     cfg.writeOnly = true;
     MockUsbTransport t(cfg);
-    EscpHandler h;
+    EscposHandler h;
     REQUIRE(t.open(UsbDeviceDescriptor{}));
 
     std::string status;

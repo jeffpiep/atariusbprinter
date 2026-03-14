@@ -1,6 +1,6 @@
 #include "manager/PrinterManager.h"
 #include "protocol/TsplHandler.h"
-#include "protocol/EscpHandler.h"
+#include "protocol/EscposHandler.h"
 #include "protocol/PclHandler.h"
 #include "transport/UsbDeviceDescriptor.h"
 #include "util/Logger.h"
@@ -493,7 +493,7 @@ int main(int argc, char* argv[]) {
     auto transport = std::make_unique<LinuxUsbTransport>();
     PrinterManager manager(std::move(transport));
     manager.registerHandler(std::make_unique<TsplHandler>());
-    manager.registerHandler(std::make_unique<EscpHandler>());
+    manager.registerHandler(std::make_unique<EscposHandler>());
     manager.registerHandler(std::make_unique<PclHandler>());
 
     if (!manager.openDevice(target)) {

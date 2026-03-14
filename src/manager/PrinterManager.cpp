@@ -148,9 +148,9 @@ void PrinterManager::tick() {
 IProtocolHandler* PrinterManager::findHandlerByType(ProtocolType proto) {
     for (auto& h : m_handlers) {
         const char* n = h->name();
-        if (proto == ProtocolType::TSPL                                   && n[0]=='T') return h.get();
-        if (proto == ProtocolType::PCL                                    && n[0]=='P') return h.get();
-        if ((proto == ProtocolType::ESCP || proto == ProtocolType::ESCPOS) && n[0]=='E') return h.get();
+        if (proto == ProtocolType::TSPL   && n[0]=='T') return h.get();
+        if (proto == ProtocolType::PCL    && n[0]=='P') return h.get();
+        if (proto == ProtocolType::ESCPOS && strcmp(n, "ESCPOS") == 0) return h.get();
     }
     return nullptr;
 }
@@ -166,9 +166,6 @@ IProtocolHandler* PrinterManager::detectProtocol(const PrintJob& job,
             hint = ProtocolType::TSPL;
         else if (id.find("COMMAND SET:PCL") != std::string::npos)
             hint = ProtocolType::PCL;
-        else if (id.find("COMMAND SET:ESCPL") != std::string::npos ||
-                 id.find("CMD:ESC/P")         != std::string::npos)
-            hint = ProtocolType::ESCP;
     }
 
     // 2. Cached protocol from previous job
@@ -237,10 +234,9 @@ bool PrinterManager::submitJob(PrintJob job, ProtocolType hint) {
     if (record->detectedProtocol == ProtocolType::UNKNOWN) {
         LOG_INFO(TAG, "Protocol auto-detected: %s", handler->name());
         const char* n = handler->name();
-        if      (n[0]=='T') record->detectedProtocol = ProtocolType::TSPL;
-        else if (n[0]=='P') record->detectedProtocol = ProtocolType::PCL;
-        else if (n[0]=='E') record->detectedProtocol =
-            (hint == ProtocolType::ESCPOS) ? ProtocolType::ESCPOS : ProtocolType::ESCP;
+        if      (n[0]=='T')                    record->detectedProtocol = ProtocolType::TSPL;
+        else if (n[0]=='P')                    record->detectedProtocol = ProtocolType::PCL;
+        else if (strcmp(n, "ESCPOS") == 0)     record->detectedProtocol = ProtocolType::ESCPOS;
     }
 
 #ifndef PLATFORM_RP2040

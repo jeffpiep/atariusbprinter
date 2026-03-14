@@ -4,7 +4,7 @@
 #include "manager/PrinterManager.h"
 #include "protocol/TsplHandler.h"
 #include "protocol/PclHandler.h"
-#include "protocol/EscpHandler.h"
+#include "protocol/EscposHandler.h"
 #include "protocol/PrintJob.h"
 #include "protocol/ProtocolType.h"
 #include "generator/ITextGenerator.h"
@@ -144,9 +144,9 @@ int main() {
     static PrinterManager manager(std::move(transportPtr));
     g_manager = &manager;
 
-    // Register handlers in specificity order: TSPL → ESCP → PCL
+    // Register handlers in specificity order: TSPL → ESCPOS → PCL
     manager.registerHandler(std::make_unique<TsplHandler>());
-    manager.registerHandler(std::make_unique<EscpHandler>());
+    manager.registerHandler(std::make_unique<EscposHandler>());
     manager.registerHandler(std::make_unique<PclHandler>());
 
     // Text generator for the selected personality
@@ -177,7 +177,7 @@ int main() {
 #elif ATARI_PRINTER_PERSONALITY == 1028
         ProtocolType::ESCPOS  // 80mm thermal receipt printer (line-oriented, like Atari 820)
 #else
-        ProtocolType::ESCP   // 825 and 1027
+        ProtocolType::ESCPOS  // default personality
 #endif
     );
     generator->configure(cfg);

@@ -40,13 +40,12 @@ set(CORE_SOURCES
     ${PRINTER_ROOT}/src/transport/UsbDeviceDescriptor.cpp
     ${PRINTER_ROOT}/src/protocol/TsplHandler.cpp
     ${PRINTER_ROOT}/src/protocol/PclHandler.cpp
-    ${PRINTER_ROOT}/src/protocol/EscpHandler.cpp
+    ${PRINTER_ROOT}/src/protocol/EscposHandler.cpp
     ${PRINTER_ROOT}/src/manager/PrinterManager.cpp
     ${PRINTER_ROOT}/src/util/Logger.cpp
     ${PRINTER_ROOT}/src/generator/ITextGenerator.cpp
     ${PRINTER_ROOT}/src/generator/TsplTextGenerator.cpp
     ${PRINTER_ROOT}/src/generator/PclTextGenerator.cpp
-    ${PRINTER_ROOT}/src/generator/EscpTextGenerator.cpp
     ${PRINTER_ROOT}/src/generator/EscposTextGenerator.cpp
     ${PRINTER_ROOT}/src/sio/SioProtocol.cpp
     ${PRINTER_ROOT}/src/sio/AtasciiConverter.cpp

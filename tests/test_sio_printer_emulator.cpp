@@ -19,7 +19,7 @@ public:
     void writeBlank() override { lines.emplace_back(""); }
     PrintJob flush() override { ++flushCount; return PrintJob{}; }
     void reset() override { lines.clear(); }
-    ProtocolType protocol() const override { return ProtocolType::ESCP; }
+    ProtocolType protocol() const override { return ProtocolType::ESCPOS; }
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

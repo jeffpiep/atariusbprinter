@@ -1,7 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "sio/LineAssembler.h"
 #include "sio/SioProtocol.h"
-#include "generator/EscpTextGenerator.h"
 #include <vector>
 #include <string>
 
@@ -15,7 +14,7 @@ public:
     void writeBlank() override { lines.emplace_back(""); }
     PrintJob flush() override { return PrintJob{}; }
     void reset() override { lines.clear(); }
-    ProtocolType protocol() const override { return ProtocolType::ESCP; }
+    ProtocolType protocol() const override { return ProtocolType::ESCPOS; }
 };
 
 // Build a 40-byte record with content followed by $9B EOL and padding

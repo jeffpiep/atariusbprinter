@@ -289,7 +289,7 @@ TEST_CASE("Config persists across multiple text records", "[lineassembler_esc]")
 
 TEST_CASE("ESC sequences ignored for non-TSPL generator", "[lineassembler_esc]") {
     TrackingGenerator gen;
-    gen.proto = ProtocolType::ESCP;
+    gen.proto = ProtocolType::ESCPOS;
     LineAssembler la(LineAssembler::Mode::COL_40, gen);
 
     ingest(la, escRecord('W', 58));
@@ -297,11 +297,10 @@ TEST_CASE("ESC sequences ignored for non-TSPL generator", "[lineassembler_esc]")
 
     // configure() must never be called for non-TSPL
     CHECK(gen.configs.empty());
-    // writeLine IS called (the ESC bytes become spaces, then stripped — empty record skipped)
-    // actually: 0x1B→space, 0x7E→'~', 'W'→'W', 58→'?' (all 4 pass through as ATASCII)
-    // then trailing-space strip: "  ~W?" → "~W?" (no trailing spaces stripped since '?' is not space)
-    // So writeLine IS called with some garbage text (expected for non-TSPL)
-    CHECK(gen.lines.size() == 1);  // the ESC-only record emits as garbage text (not config)
+    // For TSPL: ESC ~ sequences are consumed silently (4 bytes skipped, result is empty → no writeLine).
+    // For ESCPOS: empty processed record → writeBlank() (advances paper), then 'A' → writeLine().
+    // Both records produce output: 1 blank + 1 text line = 2 entries.
+    CHECK(gen.lines.size() == 2);
 }
 
 // ── Mixed ESC + text in same record ───────────────────────────────────────
@@ -466,7 +465,7 @@ TEST_CASE("ESC ~ P combined with config change in same record", "[lineassembler_
 
 TEST_CASE("ESC ~ P ignored for non-TSPL generator", "[lineassembler_esc]") {
     TrackingGenerator gen;
-    gen.proto = ProtocolType::ESCP;
+    gen.proto = ProtocolType::ESCPOS;
     LineAssembler la(LineAssembler::Mode::COL_40, gen);
 
     ingest(la, escRecord('P', 0));
@@ -524,7 +523,7 @@ TEST_CASE("ESC ~ R sets load flag independently of config dirty flag", "[lineass
 
 TEST_CASE("ESC ~ R ignored for non-TSPL generator", "[lineassembler_esc]") {
     TrackingGenerator gen;
-    gen.proto = ProtocolType::ESCP;
+    gen.proto = ProtocolType::ESCPOS;
     LineAssembler la(LineAssembler::Mode::COL_40, gen);
 
     uint8_t slot = 0xFF;
@@ -580,7 +579,7 @@ TEST_CASE("ESC ~ S config-only record produces no writeLine", "[lineassembler_es
 
 TEST_CASE("ESC ~ S ignored for non-TSPL generator", "[lineassembler_esc]") {
     TrackingGenerator gen;
-    gen.proto = ProtocolType::ESCP;
+    gen.proto = ProtocolType::ESCPOS;
     LineAssembler la(LineAssembler::Mode::COL_40, gen);
 
     uint8_t slot = 0xFF;

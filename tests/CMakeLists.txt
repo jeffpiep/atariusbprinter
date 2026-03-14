@@ -42,13 +42,12 @@ add_driver_test(test_printer_manager test_printer_manager.cpp)
 add_driver_test(test_ring_buffer     test_ring_buffer.cpp)
 
 # Phase 3
-add_driver_test(test_pcl_handler     test_pcl_handler.cpp)
-add_driver_test(test_escp_handler    test_escp_handler.cpp)
+add_driver_test(test_pcl_handler      test_pcl_handler.cpp)
+add_driver_test(test_escpos_handler   test_escpos_handler.cpp)
 
 # Phase 4
 add_driver_test(test_tspl_text_generator test_tspl_text_generator.cpp)
 add_driver_test(test_pcl_text_generator  test_pcl_text_generator.cpp)
-add_driver_test(test_escp_text_generator test_escp_text_generator.cpp)
 
 # Phase 5
 add_driver_test(test_atascii_converter   test_atascii_converter.cpp)
