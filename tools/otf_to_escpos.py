@@ -211,14 +211,14 @@ def write_test_bin(path, esc_and_seq):
 
 
 def visualize_glyphs(chars_to_show, all_glyphs, c1):
-    """Print up to 4 rendered glyphs side by side in ASCII art.
+    """Print up to 12 rendered glyphs side by side in ASCII art.
 
     Each cell is CELL_W (12) columns wide × CELL_H (24) rows tall.
     '.' = unset dot, 'O' = ink dot.  Glyphs are separated by a single space.
     """
     SEP = " "
     selected = []
-    for ch in chars_to_show[:4]:
+    for ch in chars_to_show[:12]:
         code = ord(ch)
         idx  = code - c1
         if 0 <= idx < len(all_glyphs):
@@ -256,8 +256,8 @@ def main():
     parser.add_argument("--test-bin", metavar="FILE.bin",
                         help="Output complete ESC/POS test print job binary")
     parser.add_argument("--show", metavar="CHARS",
-                        help="Print ASCII-art bitmap of up to 4 characters side by side "
-                             "(e.g. --show AaBb).  May be used without -o / --test-bin.")
+                        help="Print ASCII-art bitmap of up to 12 characters side by side "
+                             "(e.g. --show AaBb1234).  May be used without -o / --test-bin.")
     parser.add_argument("--point-size", type=int, default=None,
                         help="Font point size for both axes (default: auto-fit to 24 dots height)")
     parser.add_argument("--point-size-y", type=int, default=None,
