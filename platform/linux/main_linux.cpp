@@ -5,6 +5,11 @@
 #include "transport/UsbDeviceDescriptor.h"
 #include "util/Logger.h"
 #include "LinuxUsbTransport.h"
+#if __has_include("generator/EscposFontData.h")
+#  include "generator/EscposFontData.h"
+#  include "generator/EscposTextGenerator.h"
+#  define HAVE_ESCPOS_FONT_DATA 1
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +33,9 @@ static void printUsage(const char* prog) {
         "  --list          List detected USB printers and exit\n"
         "  --escpos        Send raw ESC/POS data from file or stdin (bypasses protocol detection)\n"
         "  --escpos-test   Send a built-in ESC/POS test receipt (80mm thermal)\n"
+        "  --escpos-fontdl-test  Download 1 user-defined solid-block glyph and print it\n"
+        "  --escpos-fontdl-all   Download full OTF-derived charset and print test lines\n"
+        "                        (requires EscposFontData.h — run tools/otf_to_escpos.py first)\n"
         "  --verbose       Enable debug logging\n"
         "  --help          Show this help\n"
         "\n"
@@ -100,6 +108,48 @@ static std::vector<uint8_t> buildEscPosTestJob() {
     return d;
 }
 
+// Build a minimal ESC/POS user-defined character download test.
+// Redefines ASCII '@' (0x40) as a solid 12x24 block using ESC & (Font A),
+// then prints it to demonstrate the bitmap download pathway.
+static std::vector<uint8_t> buildEscPosFontDlTest() {
+    std::vector<uint8_t> d;
+
+    auto push = [&](std::initializer_list<uint8_t> bytes) {
+        d.insert(d.end(), bytes);
+    };
+    auto text = [&](const char* s) {
+        while (*s) d.push_back(static_cast<uint8_t>(*s++));
+    };
+
+    // ESC @ — initialize printer
+    push({0x1B, 0x40});
+
+    // ESC & y c1 c2 x d1...dk — define user-defined character
+    //   y=3  : 3 bytes per column (24 vertical dots, Font A)
+    //   c1=c2=0x40 ('@') : define exactly one character
+    //   x=12 : 12 dots wide (full Font A width)
+    //   data : y*x = 36 bytes, all 0xFF = solid block
+    push({0x1B, 0x26, 0x03, 0x40, 0x40, 0x0C});
+    for (int i = 0; i < 36; ++i) d.push_back(0xFF);
+
+    // ESC % 1 — activate user-defined character set
+    push({0x1B, 0x25, 0x01});
+
+    // Print the downloaded glyph
+    text("Block char: @"); d.push_back(0x0A);
+
+    // ESC % 0 — restore built-in character set
+    push({0x1B, 0x25, 0x00});
+
+    // ESC d 4 — feed 4 lines before cut
+    push({0x1B, 0x64, 0x04});
+
+    // GS V 66 0 — feed and partial cut
+    push({0x1D, 0x56, 0x42, 0x00});
+
+    return d;
+}
+
 static std::vector<uint8_t> readJobData(const std::string& path) {
     std::vector<uint8_t> data;
 
@@ -133,9 +183,11 @@ int main(int argc, char* argv[]) {
     uint16_t    vid        = 0;
     uint16_t    pid        = 0;
     bool        listMode   = false;
-    bool        escposRaw  = false;
-    bool        escposTest = false;
-    bool        verbose    = false;
+    bool        escposRaw      = false;
+    bool        escposTest     = false;
+    bool        escposFontDl   = false;
+    bool        escposFontDlAll = false;
+    bool        verbose        = false;
     std::string jobPath;
 
     for (int i = 1; i < argc; ++i) {
@@ -148,6 +200,10 @@ int main(int argc, char* argv[]) {
             escposRaw = true;
         } else if (strcmp(argv[i], "--escpos-test") == 0) {
             escposTest = true;
+        } else if (strcmp(argv[i], "--escpos-fontdl-test") == 0) {
+            escposFontDl = true;
+        } else if (strcmp(argv[i], "--escpos-fontdl-all") == 0) {
+            escposFontDlAll = true;
         } else if (strcmp(argv[i], "--verbose") == 0) {
             verbose = true;
         } else if (strcmp(argv[i], "--vid") == 0 && i + 1 < argc) {
@@ -284,6 +340,123 @@ int main(int argc, char* argv[]) {
         transport->close();
         LOG_INFO(TAG, "ESC/POS test receipt sent successfully");
         return 0;
+    }
+
+    // --escpos-fontdl-test mode: download a user-defined solid-block glyph and print it.
+    if (escposFontDl) {
+        UsbDeviceDescriptor target;
+        if (vid != 0 && pid != 0) {
+            target.vendorId  = vid;
+            target.productId = pid;
+        } else {
+            UsbDeviceDescriptor devs[16];
+            int n = LinuxUsbTransport::enumeratePrinters(devs, 16);
+            if (n <= 0) {
+                fprintf(stderr, "Error: no USB printer found. "
+                        "Use --vid/--pid to specify the receipt printer.\n");
+                return 1;
+            }
+            target = devs[0];
+            LOG_INFO(TAG, "Auto-selected printer: %s", target.description().c_str());
+        }
+
+        auto job = buildEscPosFontDlTest();
+        LOG_INFO(TAG, "ESC/POS font-download test: %zu bytes", job.size());
+
+        auto transport = std::make_unique<LinuxUsbTransport>();
+        if (!transport->open(target)) {
+            fprintf(stderr, "Error: failed to open printer %s\n",
+                    target.description().c_str());
+            return 1;
+        }
+
+        const uint8_t* ptr = job.data();
+        size_t remaining   = job.size();
+        constexpr size_t CHUNK = 4096;
+        while (remaining > 0) {
+            size_t chunk = remaining < CHUNK ? remaining : CHUNK;
+            int written  = transport->write(ptr, chunk, 5000);
+            if (written < 0) {
+                fprintf(stderr, "Error: USB write failed\n");
+                transport->close();
+                return 1;
+            }
+            ptr       += written;
+            remaining -= static_cast<size_t>(written);
+        }
+
+        transport->close();
+        LOG_INFO(TAG, "ESC/POS font-download test sent successfully");
+        return 0;
+    }
+
+    // --escpos-fontdl-all: download full OTF-derived charset via EscposTextGenerator,
+    // then print three test lines covering the complete printable ASCII range.
+    // Requires EscposFontData.h (run tools/otf_to_escpos.py -o ... first, then rebuild).
+    if (escposFontDlAll) {
+#ifndef HAVE_ESCPOS_FONT_DATA
+        fprintf(stderr,
+                "Error: --escpos-fontdl-all requires EscposFontData.h.\n"
+                "Generate it first:  python tools/otf_to_escpos.py <font.otf> "
+                "-o include/generator/EscposFontData.h\n"
+                "Then rebuild.\n");
+        return 1;
+#else
+        UsbDeviceDescriptor target;
+        if (vid != 0 && pid != 0) {
+            target.vendorId  = vid;
+            target.productId = pid;
+        } else {
+            UsbDeviceDescriptor devs[16];
+            int n = LinuxUsbTransport::enumeratePrinters(devs, 16);
+            if (n <= 0) {
+                fprintf(stderr, "Error: no USB printer found. "
+                        "Use --vid/--pid to specify the receipt printer.\n");
+                return 1;
+            }
+            target = devs[0];
+            LOG_INFO(TAG, "Auto-selected printer: %s", target.description().c_str());
+        }
+
+        EscposTextGenerator gen;
+        gen.setCustomFont(kEscposFontDownload, kEscposFontDownloadSize);
+        gen.writeLine("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        gen.writeLine("abcdefghijklmnopqrstuvwxyz");
+        gen.writeLine("0123456789 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~");
+        auto job = gen.flush();
+
+        // Append feed + partial cut (generator doesn't add these)
+        static const uint8_t kTail[] = {0x1B, 0x64, 0x04, 0x1D, 0x56, 0x42, 0x00};
+        job.rawData.insert(job.rawData.end(), kTail, kTail + sizeof(kTail));
+
+        LOG_INFO(TAG, "ESC/POS fontdl-all job: %zu bytes", job.rawData.size());
+
+        auto transport = std::make_unique<LinuxUsbTransport>();
+        if (!transport->open(target)) {
+            fprintf(stderr, "Error: failed to open printer %s\n",
+                    target.description().c_str());
+            return 1;
+        }
+
+        const uint8_t* ptr = job.rawData.data();
+        size_t remaining   = job.rawData.size();
+        constexpr size_t CHUNK = 4096;
+        while (remaining > 0) {
+            size_t chunk = remaining < CHUNK ? remaining : CHUNK;
+            int written  = transport->write(ptr, chunk, 5000);
+            if (written < 0) {
+                fprintf(stderr, "Error: USB write failed\n");
+                transport->close();
+                return 1;
+            }
+            ptr       += written;
+            remaining -= static_cast<size_t>(written);
+        }
+
+        transport->close();
+        LOG_INFO(TAG, "ESC/POS fontdl-all sent successfully");
+        return 0;
+#endif // HAVE_ESCPOS_FONT_DATA
     }
 
     // Read job data

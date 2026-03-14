@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""Convert an OTF/TTF font file to ESC/POS user-defined character bitmap data.
+
+Outputs:
+  -o <file.h>          C++ header with kEscposFontDownload[] for firmware
+  --test-bin <file>    Complete ESC/POS print job binary for raw Linux testing
+
+ESC/POS format: Font A, 12 dots wide × 24 dots tall, column-major,
+3 bytes per column (MSB = topmost dot).
+
+Usage:
+  pip install Pillow
+  python tools/otf_to_escpos.py MyFont.otf \\
+      -o include/generator/EscposFontData.h \\
+      --test-bin /tmp/fonttest.bin
+
+Both -o and --test-bin may be given in the same invocation.
+"""
+
+import argparse
+import os
+import sys
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    print("Error: Pillow not installed.  Run:  pip install Pillow", file=sys.stderr)
+    sys.exit(1)
+
+# ESC/POS Font A cell dimensions
+CELL_W = 12   # dots wide
+CELL_H = 24   # dots tall
+BYTES_PER_COL = 3   # y = 3 (CELL_H / 8)
+
+
+def render_glyph(font, char, threshold, render_w=None):
+    """Render one character into a 12x24 1-bit cell.
+
+    render_w is the canvas width (in pixels) on which the glyph is drawn before
+    cropping to CELL_W (12).  It is set externally by measuring the natural glyph
+    width at the desired X point size, so it is independent of pt_y (the font's
+    loaded size which controls character height).
+
+    Behaviour:
+      render_w > CELL_W  → draw on wider canvas, then center-crop to 12 (no X scale)
+      render_w == CELL_W → draw directly; no crop needed
+      render_w < CELL_W  → draw on narrower canvas; glyph centered via x_offset padding
+
+    Y: the canvas is always CELL_H=24 tall.  When the font's point size exceeds 24,
+    Pillow naturally clips the top overflow — this is the intended "Y crop" behavior.
+
+    Returns a list of 36 bytes in ESC & column-major format:
+      column 0 bytes 0-2, column 1 bytes 0-2, ..., column 11 bytes 0-2
+    where byte 0 MSB = topmost dot, byte 2 LSB = bottommost dot.
+    """
+    if render_w is None:
+        render_w = CELL_W
+
+    img = Image.new("L", (render_w, CELL_H), color=0)  # black background
+    draw = ImageDraw.Draw(img)
+
+    # Get bounding box of this character
+    bbox = font.getbbox(char)
+    char_w = bbox[2] - bbox[0]
+
+    # Center horizontally; align so descenders land near the bottom
+    # Use the font ascent to place baseline ~20 dots from top (leaving 4 for descenders)
+    try:
+        ascent, descent = font.getmetrics()
+    except AttributeError:
+        ascent, descent = CELL_H - 4, 4
+
+    if ascent + descent > CELL_H:
+        # Top-anchor (bottom-clip): pin glyph top to row 0; rows past CELL_H clip at bottom.
+        baseline_y = ascent
+    else:
+        # Bottom-anchor (default): baseline near bottom of cell; extra space goes at top.
+        baseline_y = CELL_H - descent - 1
+    x_offset = max(0, (render_w - char_w) // 2) - bbox[0]
+    y_offset = baseline_y - ascent - bbox[1]
+
+    draw.text((x_offset, y_offset), char, font=font, fill=255)
+
+    # Crop X to CELL_W (no rescaling — proportions are preserved)
+    if render_w > CELL_W:
+        crop_x = (render_w - CELL_W) // 2
+        img = img.crop((crop_x, 0, crop_x + CELL_W, CELL_H))
+
+    # Convert to column-major bytes
+    pixels = img.load()
+    data = []
+    for col in range(CELL_W):
+        for byte_idx in range(BYTES_PER_COL):
+            val = 0
+            for bit in range(8):
+                row = byte_idx * 8 + bit
+                if row < CELL_H and pixels[col, row] > threshold:
+                    val |= (1 << (7 - bit))   # MSB = topmost dot
+            data.append(val)
+    return data
+
+
+def autofit_size(font_path, max_h=CELL_H):
+    """Find the largest integer point size where capital letters fit within max_h pixels."""
+    ref_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for pt in range(max_h, 4, -1):
+        try:
+            f = ImageFont.truetype(font_path, pt)
+        except Exception:
+            continue
+        try:
+            ascent, descent = f.getmetrics()
+        except AttributeError:
+            ascent, descent = pt, 2
+        if ascent + descent <= max_h:
+            return pt, f
+    # fallback
+    f = ImageFont.truetype(font_path, 8)
+    return 8, f
+
+
+def build_escand_sequence(glyphs, c1, c2):
+    """Build the raw ESC & download sequence bytes (including header)."""
+    buf = bytearray()
+    buf += bytes([0x1B, 0x26, 0x03, c1, c2])   # ESC & y=3 c1 c2
+    for glyph_data in glyphs:
+        buf.append(CELL_W)                       # x = 12 dots
+        buf += bytes(glyph_data)                 # 36 bytes of column data
+    return bytes(buf)
+
+
+def write_header(path, esc_and_seq, c1, c2, font_path, point_size):
+    """Write a C++ header file with the download sequence."""
+    font_name = os.path.basename(font_path)
+    total = len(esc_and_seq)
+    num_chars = c2 - c1 + 1
+
+    lines = []
+    lines.append("// Auto-generated by tools/otf_to_escpos.py")
+    lines.append(f"// Font: {font_name}  Point size: {point_size}  "
+                 f"Cell: {CELL_W}x{CELL_H}  Chars: 0x{c1:02X}-0x{c2:02X} ({num_chars} glyphs)")
+    lines.append("// DO NOT EDIT — regenerate with otf_to_escpos.py")
+    lines.append("#pragma once")
+    lines.append("#include <stdint.h>")
+    lines.append("")
+
+    # Emit as a flat constexpr array
+    lines.append(f"static constexpr uint8_t kEscposFontDownload[{total}] = {{")
+
+    # First line: ESC & header
+    header_bytes = esc_and_seq[:5]
+    lines.append("    // ESC & y=3 c1=0x{:02X} c2=0x{:02X}".format(c1, c2))
+    lines.append("    " + ", ".join(f"0x{b:02X}" for b in header_bytes) + ",")
+
+    # One glyph per comment block
+    idx = 5
+    for code in range(c1, c2 + 1):
+        ch = chr(code)
+        display = ch if ch.isprintable() and ch != '/' else f"0x{code:02X}"
+        lines.append(f"    // '{display}' (0x{code:02X})")
+        glyph_bytes = esc_and_seq[idx:idx + 1 + CELL_W * BYTES_PER_COL]  # x byte + 36 data bytes
+        # Split into rows of 13 (x + 3 bytes × 4 cols)
+        row = "    " + ", ".join(f"0x{b:02X}" for b in glyph_bytes) + ","
+        lines.append(row)
+        idx += 1 + CELL_W * BYTES_PER_COL
+
+    lines.append("};")
+    lines.append("")
+    lines.append(f"static constexpr size_t kEscposFontDownloadSize = {total};")
+    lines.append("")
+
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"Wrote {path}  ({total} bytes, {num_chars} glyphs)")
+
+
+def write_test_bin(path, esc_and_seq):
+    """Write a complete ESC/POS print job binary for direct Linux testing."""
+    buf = bytearray()
+
+    # ESC @ — initialize
+    buf += bytes([0x1B, 0x40])
+
+    # Full charset download
+    buf += esc_and_seq
+
+    # ESC % 1 — activate user-defined charset
+    buf += bytes([0x1B, 0x25, 0x01])
+
+    # Three test lines covering the full printable range
+    for line in [
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "abcdefghijklmnopqrstuvwxyz",
+        "0123456789 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+    ]:
+        buf += line.encode("ascii")
+        buf.append(0x0A)   # LF
+
+    # ESC % 0 — deactivate (restore built-in charset)
+    buf += bytes([0x1B, 0x25, 0x00])
+
+    # ESC d 4 — feed 4 lines
+    buf += bytes([0x1B, 0x64, 0x04])
+
+    # GS V 66 0 — partial cut
+    buf += bytes([0x1D, 0x56, 0x42, 0x00])
+
+    with open(path, "wb") as f:
+        f.write(buf)
+    print(f"Wrote {path}  ({len(buf)} bytes, ready for --escpos)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Convert OTF/TTF font to ESC/POS user-defined charset bitmap data."
+    )
+    parser.add_argument("font", help="OTF or TTF font file")
+    parser.add_argument("-o", metavar="FILE.h",
+                        help="Output C++ header (e.g. include/generator/EscposFontData.h)")
+    parser.add_argument("--test-bin", metavar="FILE.bin",
+                        help="Output complete ESC/POS test print job binary")
+    parser.add_argument("--point-size", type=int, default=None,
+                        help="Font point size for both axes (default: auto-fit to 24 dots height)")
+    parser.add_argument("--point-size-y", type=int, default=None,
+                        help="Vertical point size only — controls height in the 24-dot cell "
+                             "(overrides --point-size for height; auto-fit if omitted)")
+    parser.add_argument("--point-size-x", type=int, default=None,
+                        help="Horizontal point size — renders onto a proportionally scaled canvas "
+                             "then resamples to 12 dots (overrides --point-size for width). "
+                             "pt_x > pt_y squashes glyphs; pt_x < pt_y stretches them.")
+    parser.add_argument("--threshold", type=int, default=128,
+                        help="Pixel brightness threshold 0-255 (default: 128)")
+    parser.add_argument("--first", type=lambda x: int(x, 0), default=0x20,
+                        help="First character code (default: 0x20)")
+    parser.add_argument("--last", type=lambda x: int(x, 0), default=0x7E,
+                        help="Last character code (default: 0x7E)")
+    args = parser.parse_args()
+
+    if not args.o and not args.test_bin:
+        parser.error("Specify at least one output: -o <file.h> and/or --test-bin <file.bin>")
+
+    if not os.path.isfile(args.font):
+        print(f"Error: font file not found: {args.font}", file=sys.stderr)
+        sys.exit(1)
+
+    c1 = args.first
+    c2 = args.last
+    if c1 < 0x20 or c2 > 0x7E or c1 > c2:
+        print("Error: character range must be within 0x20-0x7E", file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve point sizes: --point-size sets both axes; --point-size-y/x override per axis.
+    pt_y = args.point_size      # may be None (auto-fit)
+    pt_x = args.point_size      # may be None (match pt_y)
+    if args.point_size_y is not None:
+        pt_y = args.point_size_y
+    if args.point_size_x is not None:
+        pt_x = args.point_size_x
+
+    # Load font (vertical axis determines truetype size)
+    if pt_y is not None:
+        point_size = pt_y
+        try:
+            font = ImageFont.truetype(args.font, point_size)
+        except Exception as e:
+            print(f"Error loading font: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        point_size, font = autofit_size(args.font)
+        print(f"Auto-fit point size (Y): {point_size}")
+        if pt_x is None:
+            pt_x = point_size  # default X matches auto-fit Y
+
+    # Determine render canvas width for X.
+    # When pt_x is specified and differs from pt_y, load the font at pt_x and measure
+    # the maximum natural glyph width across the character range.  This canvas width is
+    # fixed regardless of pt_y so X is never rescaled — only cropped to CELL_W.
+    if pt_x is not None and pt_x != point_size:
+        font_x = ImageFont.truetype(args.font, pt_x)
+        render_w = max(
+            font_x.getbbox(chr(c))[2] - font_x.getbbox(chr(c))[0]
+            for c in range(c1, c2 + 1)
+        )
+        x_desc = f"pt_x={pt_x} → canvas {render_w}px → crop to {CELL_W}"
+    else:
+        render_w = None  # default: CELL_W, no crop
+        x_desc = f"pt_x={pt_x if pt_x else point_size} (=pt_y, no X-crop)"
+
+    print(f"Rendering {c2 - c1 + 1} glyphs (0x{c1:02X}-0x{c2:02X}) "
+          f"pt_y={point_size} {x_desc}, cell {CELL_W}×{CELL_H}, threshold {args.threshold}")
+
+    # Render all glyphs
+    glyphs = []
+    for code in range(c1, c2 + 1):
+        ch = chr(code)
+        glyph_data = render_glyph(font, ch, args.threshold, render_w=render_w)
+        glyphs.append(glyph_data)
+
+    # Build ESC & sequence
+    esc_and_seq = build_escand_sequence(glyphs, c1, c2)
+
+    # Write outputs
+    if args.o:
+        write_header(args.o, esc_and_seq, c1, c2, args.font, point_size)
+
+    if args.test_bin:
+        write_test_bin(args.test_bin, esc_and_seq)
+
+
+if __name__ == "__main__":
+    main()
