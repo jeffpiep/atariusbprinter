@@ -210,6 +210,42 @@ def write_test_bin(path, esc_and_seq):
     print(f"Wrote {path}  ({len(buf)} bytes, ready for --escpos)")
 
 
+def visualize_glyphs(chars_to_show, all_glyphs, c1):
+    """Print up to 4 rendered glyphs side by side in ASCII art.
+
+    Each cell is CELL_W (12) columns wide × CELL_H (24) rows tall.
+    '.' = unset dot, 'O' = ink dot.  Glyphs are separated by a single space.
+    """
+    SEP = " "
+    selected = []
+    for ch in chars_to_show[:4]:
+        code = ord(ch)
+        idx  = code - c1
+        if 0 <= idx < len(all_glyphs):
+            selected.append((ch, all_glyphs[idx]))
+        else:
+            print(f"Warning: '{ch}' (0x{code:02X}) not in rendered range", file=sys.stderr)
+
+    if not selected:
+        return
+
+    # Header: character label centred over each glyph column
+    print(SEP.join(f"[{ch}]".center(CELL_W) for ch, _ in selected))
+    print(SEP.join("-" * CELL_W for _ in selected))
+
+    for row in range(CELL_H):
+        byte_idx = row // 8
+        bit_pos  = 7 - (row % 8)
+        row_parts = []
+        for _, glyph in selected:
+            row_str = ""
+            for col in range(CELL_W):
+                byte_val = glyph[col * BYTES_PER_COL + byte_idx]
+                row_str += "O" if (byte_val >> bit_pos) & 1 else "."
+            row_parts.append(row_str)
+        print(SEP.join(row_parts))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert OTF/TTF font to ESC/POS user-defined charset bitmap data."
@@ -219,6 +255,9 @@ def main():
                         help="Output C++ header (e.g. include/generator/EscposFontData.h)")
     parser.add_argument("--test-bin", metavar="FILE.bin",
                         help="Output complete ESC/POS test print job binary")
+    parser.add_argument("--show", metavar="CHARS",
+                        help="Print ASCII-art bitmap of up to 4 characters side by side "
+                             "(e.g. --show AaBb).  May be used without -o / --test-bin.")
     parser.add_argument("--point-size", type=int, default=None,
                         help="Font point size for both axes (default: auto-fit to 24 dots height)")
     parser.add_argument("--point-size-y", type=int, default=None,
@@ -236,8 +275,9 @@ def main():
                         help="Last character code (default: 0x7E)")
     args = parser.parse_args()
 
-    if not args.o and not args.test_bin:
-        parser.error("Specify at least one output: -o <file.h> and/or --test-bin <file.bin>")
+    if not args.o and not args.test_bin and not args.show:
+        parser.error("Specify at least one output: -o <file.h>, --test-bin <file.bin>, "
+                     "or --show <chars>")
 
     if not os.path.isfile(args.font):
         print(f"Error: font file not found: {args.font}", file=sys.stderr)
@@ -300,6 +340,9 @@ def main():
     esc_and_seq = build_escand_sequence(glyphs, c1, c2)
 
     # Write outputs
+    if args.show:
+        visualize_glyphs(args.show, glyphs, c1)
+
     if args.o:
         write_header(args.o, esc_and_seq, c1, c2, args.font, point_size)
 
