@@ -73,6 +73,7 @@ python tools/otf_to_escpos.py MyFont.otf \
 | `font` | (required) | OTF or TTF font file path |
 | `-o FILE.h` | — | Write C++ header with `kEscposFontDownload[]` |
 | `--test-bin FILE.bin` | — | Write complete ESC/POS print job binary |
+| `--show CHARS` | — | Print ASCII-art bitmap of up to 12 characters side by side (see [Visualizer](#visualizer)) |
 | `--point-size N` | auto | Set both X and Y point size to N |
 | `--point-size-y N` | auto | Vertical (height) point size — controls how tall glyphs render in the 24-dot cell |
 | `--point-size-x N` | =pt_y | Horizontal (width) point size — controls canvas width before crop to 12 dots |
@@ -80,7 +81,7 @@ python tools/otf_to_escpos.py MyFont.otf \
 | `--first 0xNN` | 0x20 | First character code to render (hex or decimal) |
 | `--last 0xNN` | 0x7E | Last character code to render |
 
-At least one of `-o` or `--test-bin` must be specified.
+At least one of `-o`, `--test-bin`, or `--show` must be specified.
 
 ---
 
@@ -270,23 +271,67 @@ attach time.
 
 ---
 
+## Visualizer
+
+`--show CHARS` renders up to 12 glyphs as ASCII art directly in the terminal —
+`'.'` for an unset dot, `'O'` for an ink dot — printed side by side with a label
+header.  It can be used alone (without `-o` or `--test-bin`) for rapid tuning of
+point size and threshold before committing to a firmware rebuild or printer test.
+
+```bash
+# Inspect 4 glyphs with production settings
+python tools/otf_to_escpos.py Atari-822-Thermal.otf \
+    --point-size-x 20 --point-size-y 22 --threshold 50 \
+    --show "Ag1!"
+```
+
+Example output:
+
+```
+    [A]          [g]          [1]          [!]
+------------ ------------ ------------ ------------
+............  ............  ............  ............
+..OOOOOOO...  ..OOOOOOO...  ....OOO.....  ....OOO.....
+OO.......OO.  OO.......OO.  ...OOOO.....  ....OOO.....
+...
+```
+
+The bitmap is the exact data sent to the printer — what you see is what prints.
+
+Up to 12 characters may be shown in one invocation:
+
+```bash
+python tools/otf_to_escpos.py Atari-822-Thermal.otf \
+    --point-size-x 20 --point-size-y 22 --threshold 50 \
+    --show "ABCDEFGHIJKL"
+```
+
+`--show` can be combined with `-o` or `--test-bin` in the same invocation.
+
+---
+
 ## Full Workflow Example
 
 ```bash
-# 1. Generate font header + test binary
+# 1. Tune point size and threshold without touching the printer
+python tools/otf_to_escpos.py Atari-822-Thermal.otf \
+    --point-size-x 20 --point-size-y 22 --threshold 50 \
+    --show "AaBb1!@#"
+
+# 2. Generate font header + test binary
 python tools/otf_to_escpos.py Atari-822-Thermal.otf \
     --point-size-x 20 --point-size-y 22 \
     --threshold 50 \
     -o include/generator/EscposFontData.h \
     --test-bin /tmp/fonttest.bin
 
-# 2. Quick visual check — send test binary to printer
+# 3. Quick visual check — send test binary to printer
 ./build/tspl_print --escpos --vid 0483 --pid 5720 /tmp/fonttest.bin
 
-# 3. Rebuild firmware with new font header
+# 4. Rebuild firmware with new font header
 cmake --build build -j$(nproc)
 
-# 4. Full firmware font test via CLI
+# 5. Full firmware font test via CLI
 ./build/tspl_print --escpos-fontdl-all --vid 0483 --pid 5720
 ```
 
