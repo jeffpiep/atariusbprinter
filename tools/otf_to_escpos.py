@@ -33,7 +33,7 @@ CELL_H = 24   # dots tall
 BYTES_PER_COL = 3   # y = 3 (CELL_H / 8)
 
 
-def render_glyph(font, char, threshold, render_w=None):
+def render_glyph(font, char, threshold, render_w=None, scale_y=1.0):
     """Render one character into a 12x24 1-bit cell.
 
     render_w is the canvas width (in pixels) on which the glyph is drawn before
@@ -41,12 +41,14 @@ def render_glyph(font, char, threshold, render_w=None):
     width at the desired X point size, so it is independent of pt_y (the font's
     loaded size which controls character height).
 
+    scale_y > 1.0 stretches the glyph taller: the image is scaled up in Y then
+    cropped from the top, keeping the baseline anchored at the bottom of the cell.
+    scale_y < 1.0 squashes the glyph shorter (rarely needed).
+
     Behaviour:
       render_w > CELL_W  → draw on wider canvas, then center-crop to 12 (no X scale)
       render_w == CELL_W → draw directly; no crop needed
       render_w < CELL_W  → draw on narrower canvas; glyph centered via x_offset padding
-
-    Y: the canvas is always CELL_H=24 tall.  Content that overflows the bottom is clipped.
 
     Returns a list of 36 bytes in ESC & column-major format:
       column 0 bytes 0-2, column 1 bytes 0-2, ..., column 11 bytes 0-2
@@ -73,6 +75,14 @@ def render_glyph(font, char, threshold, render_w=None):
     y_offset = baseline_y - ascent
 
     draw.text((x_offset, y_offset), char, font=font, fill=255)
+
+    # Y stretch: scale the image taller, then crop from the top so the baseline
+    # stays at the bottom of the cell.
+    if scale_y != 1.0:
+        new_h = round(CELL_H * scale_y)
+        img = img.resize((render_w, new_h), Image.LANCZOS)
+        crop_top = max(0, new_h - CELL_H)
+        img = img.crop((0, crop_top, render_w, crop_top + CELL_H))
 
     # Crop X to CELL_W (no rescaling — proportions are preserved)
     if render_w > CELL_W:
@@ -260,6 +270,10 @@ def main():
                         help="Horizontal point size — renders onto a proportionally scaled canvas "
                              "then resamples to 12 dots (overrides --point-size for width). "
                              "pt_x > pt_y squashes glyphs; pt_x < pt_y stretches them.")
+    parser.add_argument("--scale-y", type=float, default=1.0, metavar="FACTOR",
+                        help="Scale glyph height by FACTOR before fitting into the 24-dot cell "
+                             "(e.g. --scale-y 1.25 stretches 25%% taller). "
+                             "Baseline stays at the bottom; top is cropped when FACTOR > 1.")
     parser.add_argument("--threshold", type=int, default=128,
                         help="Pixel brightness threshold 0-255 (default: 128)")
     parser.add_argument("--first", type=lambda x: int(x, 0), default=0x20,
@@ -319,14 +333,15 @@ def main():
         render_w = None  # default: CELL_W, no crop
         x_desc = f"pt_x={pt_x if pt_x else point_size} (=pt_y, no X-crop)"
 
+    scale_y_desc = f"  scale_y={args.scale_y}" if args.scale_y != 1.0 else ""
     print(f"Rendering {c2 - c1 + 1} glyphs (0x{c1:02X}-0x{c2:02X}) "
-          f"pt_y={point_size} {x_desc}, cell {CELL_W}×{CELL_H}, threshold {args.threshold}")
+          f"pt_y={point_size} {x_desc}{scale_y_desc}, cell {CELL_W}×{CELL_H}, threshold {args.threshold}")
 
     # Render all glyphs
     glyphs = []
     for code in range(c1, c2 + 1):
         ch = chr(code)
-        glyph_data = render_glyph(font, ch, args.threshold, render_w=render_w)
+        glyph_data = render_glyph(font, ch, args.threshold, render_w=render_w, scale_y=args.scale_y)
         glyphs.append(glyph_data)
 
     # Build ESC & sequence
